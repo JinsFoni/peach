@@ -2129,6 +2129,32 @@ _PORNHUB_PATH_RE = re.compile(
 _PORNHUB_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,80}$")
 #: 作品页里的精确发布时间。列表页只给「3 days ago」这类相对写法。
 _PORNHUB_UPLOAD_DATE_RE = re.compile(r'"uploadDate"\s*:\s*"([^"]+)"')
+#: vkey 的前 8 位是十六进制上传时间戳（`ph5b531d5a1c49d` → `5b531d5a`）。
+#: 2026-10-24 实测：`6ab39e315f82d` 反推出 09:38:57，详情页 `uploadDate` 是 09:51:16。
+_PORNHUB_VKEY_STAMP_RE = re.compile(r"^(?:ph)?([0-9a-f]{8})", re.IGNORECASE)
+#: 反推值必须落在站点有视频以来的区间：认不出的 vkey 不该被当成 1970 年。
+_PORNHUB_STAMP_FLOOR = datetime(2007, 1, 1, tzinfo=timezone.utc)
+
+
+def _pornhub_upload_stamp(viewkey: str, *, now: datetime | None = None) -> str | None:
+    """从 vkey 反推上传时间，认不出来就是 None。
+
+    列表页的时间字面不可靠：中文站写「6年前」，粗到年；站点对最近几条还写成
+    「56年前」（英文站同样是 `56 years ago`），照字面读会把最新几条排到末尾。
+    vkey 里带着上传那一刻的秒级时间戳，比这两种字面都准。
+    """
+    matched = _PORNHUB_VKEY_STAMP_RE.match(viewkey or "")
+    if matched is None:
+        return None
+    try:
+        stamp = datetime.fromtimestamp(int(matched.group(1), 16), timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    ceiling = (now or datetime.now(timezone.utc)) + timedelta(days=2)
+    if not _PORNHUB_STAMP_FLOOR <= stamp <= ceiling:
+        return None
+    return _iso_utc(stamp)
+
 
 #: 人物页有三种页型，各自的视频页条数不同：2026-10-23 实测同一位演员在
 #: `/model/` 下只列得 23 条，在 `/pornstar/` 下是 49 条。认哪一种只有页面自己
@@ -2284,24 +2310,26 @@ class PornhubConnector(_BaseConnector):
         duration = card.select_one("var.duration") or card.select_one(".duration")
         added = card.select_one(".added")
         added_text = plain_text(added.get_text(" ")) if added is not None else None
+        # vkey 反推的时间优先：列表上的字面粗到年，最近几条还被站点写成「56年前」。
+        published_at = _pornhub_upload_stamp(viewkey) or _iso_from_relative(added_text)
         return FollowCandidate(
             provider=self.provider,
             external_id=viewkey,
             title=title or f"video {viewkey}",
             url=f"{self.SITE}/view_video.php?viewkey={viewkey}",
             thumb_url=thumb_url if isinstance(thumb_url, str) else None,
-            published_at=_iso_from_relative(added_text),
+            published_at=published_at,
             duration=_duration_seconds(plain_text(duration.get_text(" ")) if duration else None),
             extra={"added_text": added_text,
-                   "published_precision": "approximate" if added_text else "unknown",
+                   "published_precision": "approximate" if published_at else "unknown",
                    "media_kind": "video"},
         )
 
     def _probe_detail(self, candidate: FollowCandidate) -> FollowCandidate:
         """详情页补精确时间、分类、标签与上传者；失败时保留列表候选。
 
-        列表页只有「3 days ago」，精确到分钟的发布时间、分类和标签都只在详情页。
-        失败的候选标成 `partial`：库里已有的精确值不会被相对时间盖掉，下次检查再补。
+        列表那边的时间是从 vkey 反推的近似值，精确到分钟的发布时间、分类和标签都只在
+        详情页。失败的候选标成 `partial`：库里已有的精确值不会被近似值盖掉，下次检查再补。
         """
         listed = replace(candidate, partial=True)
         try:
@@ -2325,7 +2353,7 @@ class PornhubConnector(_BaseConnector):
     def _detail(self, body: bytes) -> dict:
         """作品页才有的几样：精确发布时间、分类、标签与上传者。
 
-        `uploadDate` 是这条链路上唯一精确到分钟的发布时间；列表只给相对写法。
+        `uploadDate` 是这条链路上最准的发布时间：列表那边只能从 vkey 反推。
         分类与标签分属两档：分类是站点的题材归属，标签是内容描述。上传者按 `artist`
         记——这个站的「作者」就是出镜的那位。
         """

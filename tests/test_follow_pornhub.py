@@ -141,6 +141,35 @@ class PornhubPersonPageParsingTests(unittest.TestCase):
         # 签名只有几小时的预览片不落库：它不会被当成媒体地址写进账本。
         self.assertIsNone(first.media_url)
 
+    def test_the_listing_time_comes_from_the_view_key(self):
+        """列表上的时间字面粗到年，站点还把最新几条写成「56年前」，vkey 里带着真时间。
+
+        `6ab39e315f82d` 的 `6ab39e31` 是上传那一刻的秒级时间戳：详情页给的
+        `uploadDate` 是 2026-09-23T09:51:16Z，两者差十三分钟。
+        """
+        body = _page([_card("6ab39e315f82d", "Newest work", added="56年前"),
+                      _card("6856a120dcdae", "Older work", added="2年前")],
+                     canonical="https://cn.pornhub.com/model/mini-diva/videos")
+        connector = build_connector("pornhub", transport=_transport(body=body))
+        fetch = connector.fetch("mini-diva")
+        self.assertEqual([row.published_at for row in fetch.candidates],
+                         ["2026-09-23T09:38:57Z", "2025-06-21T12:10:08Z"])
+        newest = fetch.candidates[0]
+        self.assertEqual(newest.extra["added_text"], "56年前")
+        self.assertEqual(newest.extra["published_precision"], "approximate")
+
+    def test_a_view_key_without_a_stamp_falls_back_to_the_listed_time(self):
+        body = _page([_card("upright20x24", "Unstamped work", added="3 days ago"),
+                      _card("00000000abc", "Prehistoric work", added="4 days ago")],
+                     canonical="https://cn.pornhub.com/model/mini-diva/videos")
+        connector = build_connector("pornhub", transport=_transport(body=body))
+        fetch = connector.fetch("mini-diva")
+        for row in fetch.candidates:
+            self.assertIsNotNone(row.published_at)
+            self.assertEqual(row.extra["published_precision"], "approximate")
+        # 认不出的 vkey 不许被读成 1970 年：两条都退回字面换算的近似时间。
+        self.assertGreater(fetch.candidates[1].published_at, "2007-01-01")
+
     def test_the_last_page_ends_history_instead_of_failing(self):
         connector = build_connector("pornhub", transport=_transport(status=404, body=b"gone"))
         with self.assertRaises(FollowHistoryEnd):
