@@ -38,7 +38,7 @@
 
 - `/model/lana-rhoades/videos` → canonical `https://www.pornhub.com/pornstar/lana-rhoades`
 - `/model/mini-diva/videos` → canonical 指向自己
-- `/users/sweetiefox/videos` → canonical 指向自己
+- `/users/<账号>/videos` → canonical 指向自己
 
 ## 作品页
 
