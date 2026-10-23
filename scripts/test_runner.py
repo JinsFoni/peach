@@ -406,15 +406,35 @@ def dependency_inputs(source: str) -> dict:
     return change_impact.dependency_inputs(source)
 
 
+def mode_only_entries(raw: str) -> bool:
+    """这段 raw diff 里有没有只在模式上有差别的条目。
+
+    `git diff <base>` 只看工作区，暂存区里改的执行位（`git update-index --chmod=+x`）
+    只有 `--cached` 看得见，所以调用方把两份输出拼起来判。符号链接在任何一侧出现都算，
+    换目标与换类型都会改变读到的内容。新增与删除的条目不算：它们的模式差是 000000，
+    按功能域验证即可。
+    """
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        before, after = parts[0].lstrip(":"), parts[1]
+        if "120000" in {before, after}:
+            return True
+        if before != after and "000000" not in {before, after}:
+            return True
+    return False
+
+
 def changed_contents(root: Path, base: str, paths: Iterable[str]) -> dict:
     result = {}
     for path in paths:
         if not (path.endswith(".py") or path in {*change_impact.PACKAGE_FILES, "pyproject.toml"}):
             continue
         try:
-            raw = test_evidence.git(root, "diff", "--raw", base, "--", path)
-            modes = [part.lstrip(":") for part in raw.split()[:2]]
-            if "120000" in modes or (len(modes) == 2 and "000000" not in modes and modes[0] != modes[1]):
+            worktree = test_evidence.git(root, "diff", "--raw", base, "--", path)
+            staged = test_evidence.git(root, "diff", "--cached", "--raw", base, "--", path)
+            if mode_only_entries("\n".join(filter(None, (worktree, staged)))):
                 result[path] = (None, None)
                 continue
             result[path] = (test_evidence.git(root, "show", f"{base}:{path}"),
