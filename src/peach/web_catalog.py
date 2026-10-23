@@ -578,6 +578,7 @@ def attach_creator_reference_details(contract: WebContract, refs):
 def attach_saved_follow_cards(contract: WebContract, rows):
     """已保存在线卡片使用关注来源的封面与内容标签。"""
     from .follow_store import FollowStore
+    from .follow_stream import media_type
     from .web_follow import _item_tags, _thumb_url
 
     ids = [row["id"] for row in rows if row.get("location") == "online"]
@@ -599,6 +600,8 @@ def attach_saved_follow_cards(contract: WebContract, rows):
         row["follow_item_id"] = item.id
         row["follow_thumb_url"] = _thumb_url(item)
         row["follow_tags"] = _item_tags(item)
+        # 片源类型跟着条目走：只有 HLS 的来源给清单类型，其余按 mp4。
+        row["follow_media_type"] = media_type(item.provider, item.media_url)
 
 
 #: 版次的展示次序：正片在前，处理过的在后。这不是偏好排序，只是要一个稳定的
@@ -880,6 +883,25 @@ def label_makers(contract: WebContract, c, aid) -> dict[int, dict]:
     return chains
 
 
+def attach_follow_playback(c, row: dict, aid) -> None:
+    """在线资产的播放字段：反查它对应的关注条目，给出条目 id 与片源类型。
+
+    在线资产的 `path` 是来源作品页，不是可播地址；能播的那条代理在
+    `/follow-stream?id=<follow_item>`。保存时写的是 `follow_item.asset_id`，
+    反查一次就能让馆藏详情自己播，不必先跳回关注页。没有对应条目的行只留一个空 id。
+    """
+    from .follow_stream import media_type
+
+    found = c.execute(
+        "SELECT i.id,s.provider,i.media_url FROM follow_item i"
+        " JOIN follow_source s ON s.id=i.source_id"
+        " WHERE i.asset_id=? ORDER BY i.id LIMIT 1", (aid,),
+    ).fetchone()
+    row["follow_item_id"] = int(found[0]) if found else None
+    if found is not None:
+        row["follow_media_type"] = media_type(str(found[1] or ""), found[2])
+
+
 def q_item(contract: WebContract, aid):
     """按 id 直取。
     ⚠️ 没有这个接口时，前端只能用「带筛选条件再查一遍然后 find」的绕法：
@@ -911,14 +933,10 @@ def q_item(contract: WebContract, aid):
         # 被自动写入者改，`mutation_revision` 则是编辑时回传的乐观并发凭据。
         d["field_owners"] = parse_owners(d.get("field_owners"))
         d["mutation_revision"] = int(d.get("mutation_revision") or 0)
-        # 在线资产的 `path` 是来源作品页，不是可播地址；能播的那条代理在
-        # `/follow-stream?id=<follow_item>`。保存时写的是 `follow_item.asset_id`，
-        # 反查一次就能让馆藏详情自己播，不必先跳回关注页。
+        # 在线资产的 `path` 是来源作品页，不是可播地址；可播的那条代理与片源类型
+        # 由 `attach_follow_playback` 一起给出。
         if d.get("location") == "online":
-            row = c.execute(
-                "SELECT id FROM follow_item WHERE asset_id=? ORDER BY id LIMIT 1", (aid,),
-            ).fetchone()
-            d["follow_item_id"] = int(row[0]) if row else None
+            attach_follow_playback(c, d, aid)
         legacy_rows = list(c.execute(
             "SELECT t.tag,t.source FROM asset_tag t WHERE t.asset_id=? AND "
             + tag_not_hidden("t.asset_id", "peach_normalize(t.tag)")

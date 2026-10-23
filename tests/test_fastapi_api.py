@@ -2295,6 +2295,67 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("2B Camp [4K].webm", disposition)
         self.assertNotIn("img.kemono.cr", disposition)
 
+    async def test_a_hls_only_source_plays_through_a_rewritten_playlist(self):
+        """只有 HLS 的来源：顶层清单改写成 `/follow-hls` 的键，上游地址不外露。
+
+        分片与子清单都走同一个端点按短键回取；下载明确拒绝，因为清单不是片子。
+        """
+        from peach.follow_stream import ResolvedFollowMedia
+
+        connection = sqlite3.connect(self.db)
+        connection.executescript((ROOT / "migrations" / "0018_online_follow.sql").read_text(
+            encoding="utf-8"))
+        connection.execute(
+            "INSERT INTO follow_source(id,provider,ref,label,url,semantics,created_at,updated_at)"
+            " VALUES(1,'pornhub','mini-diva','Mini Diva',"
+            "'https://www.pornhub.com/model/mini-diva/videos','work','x','x')"
+        )
+        connection.execute(
+            "INSERT INTO follow_item(id,source_id,external_id,title,url,release_key,"
+            "first_seen_at,last_seen_at,metadata_json) VALUES(9,1,'6aad2df8d45f5','Work',"
+            "'https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5','k','x','x',"
+            "'{\"media_kind\": \"video\"}')"
+        )
+        connection.commit()
+        connection.close()
+
+        master = b"#EXTM3U\n#EXTINF:8.0,\nseg-1.ts\n"
+
+        def upstream(request):
+            if request.url.path.endswith("master.m3u8"):
+                return httpx.Response(200, stream=httpx.ByteStream(master), request=request,
+                                      headers={"content-type": "application/vnd.apple.mpegurl"})
+            return httpx.Response(200, stream=httpx.ByteStream(b"segment"), request=request,
+                                  headers={"content-type": "video/mp2t", "content-length": "7"})
+
+        resolved = ResolvedFollowMedia(
+            "https://ev-h.phncdn.com/hls/720/master.m3u8?validto=2",
+            "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+            allowed_hosts=("phncdn.com",), playlist=True)
+        original = self.app.state.http_transport.client
+        fake = httpx.Client(transport=httpx.MockTransport(upstream), follow_redirects=True)
+        self.app.state.http_transport.client = fake
+        try:
+            with patch.object(self.app.state.follow_media_resolver, "resolve",
+                              return_value=resolved):
+                played = await self.client.get("/follow-stream?id=9&t=secret")
+                refused = await self.client.get("/follow-stream?id=9&t=secret&download=1")
+            self.assertEqual(played.status_code, 200)
+            self.assertEqual(played.headers["content-type"].split(";")[0],
+                             "application/vnd.apple.mpegurl")
+            self.assertNotIn("phncdn", played.text)
+            child = [line for line in played.text.splitlines()
+                     if line and not line.startswith("#")][0]
+            self.assertTrue(child.startswith("/follow-hls?id=9&r="))
+            segment = await self.client.get(f"{child}&t=secret")
+        finally:
+            self.app.state.http_transport.client = original
+            fake.close()
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(segment.status_code, 200)
+        self.assertEqual(segment.content, b"segment")
+        self.assertEqual(segment.headers["content-type"], "video/mp2t")
+
     async def test_follow_image_and_preview_segments_replay_from_disk(self):
         from peach.preview_cache import PreviewCache
         from peach.remote_media_cache import cache_for

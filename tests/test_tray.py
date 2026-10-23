@@ -61,8 +61,10 @@ class TrayTests(unittest.TestCase):
     def test_start_missing_does_not_duplicate_healthy_service(self):
         spec = ServiceSpec("http", "http://local/healthz", ("peach", "serve"), True)
         popen = Mock()
-        manager = ServiceManager((spec,), popen=popen, health_get=lambda *args, **kwargs: Response())
-        manager.start_missing()
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ServiceManager((spec,), popen=popen, log_dir=Path(directory),
+                                     health_get=lambda *args, **kwargs: Response())
+            manager.start_missing()
         popen.assert_not_called()
 
     def test_services_never_own_ledger_sync(self):
@@ -208,8 +210,10 @@ class ServiceStatusTests(unittest.TestCase):
             "warnings": ["CloudDrive · 115：没有权限读取"]}}
         spec = ServiceSpec("https", "https://local/healthz", ("noop",), True)
         popen = Mock()
-        manager = ServiceManager((spec,), popen=popen, health_get=lambda *a, **k: response)
-        manager.start_missing()
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ServiceManager((spec,), popen=popen, log_dir=Path(directory),
+                                     health_get=lambda *a, **k: response)
+            manager.start_missing()
         self.assertEqual(manager.status(), "HTTPS 正常（CloudDrive · 115：没有权限读取）")
         popen.assert_not_called()
 

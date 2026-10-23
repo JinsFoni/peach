@@ -37,7 +37,7 @@ from .follow_identity import (
 from .follow_secrets import (
     CREDENTIAL_GUIDE, CredentialError, CredentialStore, credential_store_for,
 )
-from .follow_stream import proxyable
+from .follow_stream import media_type, proxyable, resolvable_at_play
 from .follow_sources import (
     CONNECTORS, KemonoConnector, Rule34VideoConnector, build_connector,
     canonical_source_ref, display_thumb_url, f95_attachment_media_items, f95_discussion_image,
@@ -733,12 +733,8 @@ def _media_kind(item) -> str:
 
 
 def _video_media_type(value: object) -> str:
-    path = urllib.parse.urlsplit(str(value or "")).path.casefold()
-    if path.endswith(".webm"):
-        return "video/webm"
-    if path.endswith(".mov"):
-        return "video/quicktime"
-    return "video/mp4"
+    """一条媒体地址的播放器源类型；扩展名判据与媒体代理同一份实现。"""
+    return media_type("", str(value or ""))
 
 
 def _media_key(media: dict) -> str:
@@ -1026,9 +1022,13 @@ def _item_payload(item, credential_providers: frozenset[str] = frozenset()) -> d
     credential_ready = not needs_credential or item.provider in credential_providers
     # 直链媒体只有媒体代理肯取的才算可播（白名单主机，或来源登记为放行任意公网图床）；
     # 不放行的由界面直接引用缩略图。
+    # 有些来源落库时没有可抄的直链（签名地址会过期，或者只有 HLS 清单），正片要等
+    # 按下播放才去详情页解析。它们按作品页地址判断可播，不按 `media_url`。
     playable = (media_kind in {"video", "image"}
                 and ((bool(media_items) and credential_ready)
-                     or (not needs_credential and proxyable(item.provider, item.media_url))))
+                     or (not needs_credential
+                         and (proxyable(item.provider, item.media_url)
+                              or resolvable_at_play(item.provider, item.url)))))
     return {
         "id": item.id,
         "provider": item.provider,
@@ -1063,7 +1063,7 @@ def _item_payload(item, credential_providers: frozenset[str] = frozenset()) -> d
         # 拿它在图落地前占好比例。没有的来源保持 None，界面加载完会回写。
         "width": _positive_dim(item.metadata.get("width")),
         "height": _positive_dim(item.metadata.get("height")),
-        "media_type": _video_media_type(item.media_url)
+        "media_type": media_type(item.provider, item.media_url)
                       if media_kind == "video" else None,
         # 可直接读取的附件与仍需会话解析的外链可以同时存在。后者不能把
         # 前者整体锁死；详情继续复用同一条 /follow-stream 媒体代理路径。

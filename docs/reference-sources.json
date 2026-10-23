@@ -1081,6 +1081,25 @@
       },
       "role": "javinfo 的归档仓没有许可证，只借思路不借代码；它依赖的 r18 旧 API 已失效，没有 Peach 缺的解析器（待办第 65 条）。",
       "consumers": []
+    },
+    {
+      "id": "follow-pornhub-hls",
+      "cadence": "manual",
+      "volatile": true,
+      "name": "Pornhub 人物页与 HLS 清单证据",
+      "url": "https://www.pornhub.com/model/mini-diva/videos",
+      "snapshot": "docs/reference-snapshots/follow-pornhub-hls.md",
+      "checked_on": "2026-10-23",
+      "sha256": "38b6c5b4dd03ee82f5b11fbc3dfd478a349009789b67dd98aeb3ec4048f3ee84",
+      "role": "追更来源 pornhub 的列表结构、页型归一、详细时间与标签来源，以及「只有 HLS、没有渐进式 mp4」的播放边界证据。",
+      "consumers": [
+        "src/peach/follow_providers.py",
+        "src/peach/follow_sources.py",
+        "src/peach/follow_stream.py",
+        "src/peach/routes_media.py",
+        "tests/test_follow_pornhub.py",
+        "tests/test_follow_stream.py"
+      ]
     }
   ]
 }

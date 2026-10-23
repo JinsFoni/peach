@@ -11688,6 +11688,7 @@ var Gr = (e) => (e?.results || []).filter((e) => !e.ok), Kr = (e) => (e?.results
 	"rule34video",
 	"rule34xxx",
 	"rule34paheal",
+	"pornhub",
 	"gofile",
 	"f95zone",
 	"simpcity"
@@ -31833,7 +31834,7 @@ function rD(e, t) {
 function Lde(e) {
 	return e.location === "online" && e.follow_item_id ? {
 		src: `/follow-stream?id=${e.follow_item_id}`,
-		type: "video/mp4"
+		type: e.follow_media_type || "video/mp4"
 	} : null;
 }
 async function Rde(e, t) {

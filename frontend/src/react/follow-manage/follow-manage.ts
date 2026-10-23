@@ -666,7 +666,7 @@ export const checkedText = (source: FollowSource): string =>
  *  页面只认这份名单：没登记的来源直接不出 `<img>`。 */
 export const SOURCE_ICON_PROVIDERS = new Set([
   'fanbox', 'patreon', 'subscribestar', 'kemono', 'coomer', 'pawchive',
-  'rule34video', 'rule34xxx', 'rule34paheal', 'gofile', 'f95zone', 'simpcity',
+  'rule34video', 'rule34xxx', 'rule34paheal', 'pornhub', 'gofile', 'f95zone', 'simpcity',
 ]);
 
 export const sourceIconUrl = (provider: string): string =>

@@ -2121,6 +2121,285 @@ def official_profile_links(body, *, forum_host: str = "") -> tuple[dict, ...]:
     return tuple(found.values())
 
 
+#: Pornhub 的人物页路径。三种都在用：`/model/<slug>` 是认证模特，`/pornstar/<slug>`
+#: 是职业演员，`/users/<slug>` 是普通账号（2026-10-23 实测前两种会按账号类型互相 301）。
+#: 后面可以跟页签名；只认 `videos`，因为这条连接器只收视频。
+_PORNHUB_PATH_RE = re.compile(
+    r"^/(model|pornstar|users)/([A-Za-z0-9][A-Za-z0-9_\-]{0,80})(?:/([a-z]+))?/?$")
+_PORNHUB_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,80}$")
+#: 作品页里的精确发布时间。列表页只给「3 days ago」这类相对写法。
+_PORNHUB_UPLOAD_DATE_RE = re.compile(r'"uploadDate"\s*:\s*"([^"]+)"')
+
+#: 人物页有三种页型，各自的视频页条数不同：2026-10-23 实测同一位演员在
+#: `/model/` 下只列得 23 条，在 `/pornstar/` 下是 49 条。认哪一种只有页面自己
+#: 说得准（`link rel=canonical`），所以发现一次按 slug 记住。
+#: 这是站点知识而不是账本真相：进程重启后重新发现一次，代价是一次额外请求。
+_PORNHUB_BASES: dict[str, tuple[float, str]] = {}
+_PORNHUB_BASE_TTL = 6 * 3600
+
+
+class PornhubConnector(_BaseConnector):
+    """pornhub.com 的人物页：列表是 HTML，详情页给精确时间、分类与标签。
+
+    `ref` 是人物 slug，例如 `mini-diva`。三种人物页（认证模特、职业演员、普通账号）
+    归一到同一个 ref：抓取统一走 `www.pornhub.com`，页型按 canonical 认。
+    """
+
+    provider = "pornhub"
+    #: 翻过最后一页时人物页回 404。2026-10-23 实测高产量演员从第 10 页起回 404，
+    #: 站点本身对深翻页有上限，回填因此也是有界的。
+    HISTORY_END_STATUSES = (404,)
+    #: 详情页每轮最多补多少条。列表只给相对时间与时长，精确时间、分类与标签都在详情页。
+    DEFAULT_ENRICH_BUDGET = 12
+    #: 补齐之后 metadata 里会有 `tag_types`；与 rule34video 共用同一条判据。
+    ENRICHED_MARK = "tag_types"
+    #: 没有认过页型时先按模型页取，再按 canonical 纠正。
+    BASE_TEMPLATE = "https://www.pornhub.com/model/{slug}/videos"
+
+    @classmethod
+    def parse_url(cls, provider: str, parsed: urllib.parse.SplitResult,
+                  host: str) -> "ParsedSource":
+        matched = _PORNHUB_PATH_RE.match(parsed.path or "/")
+        if not matched:
+            raise FollowSourceError(
+                "pornhub 的链接要指向人物页，形如 "
+                "https://www.pornhub.com/model/mini-diva/videos")
+        kind, slug, tab = matched.group(1), matched.group(2), (matched.group(3) or "").lower()
+        if tab and tab != "videos":
+            raise FollowSourceError(f"只订阅视频页，不订阅 /{tab}")
+        # 链接里那一段就是页型，先记下；抓取时 canonical 说了算。
+        base = f"https://www.pornhub.com/{kind}/{slug}"
+        _remember_base(slug.casefold(), base + "/videos")
+        return ParsedSource("pornhub", slug.casefold(), base + "/videos", _slug_label(slug))
+
+    def fetch(self, ref: str, *, etag: str | None = None,
+              last_modified: str | None = None, page: int = 0) -> SourceFetch:
+        slug = (ref or "").strip().strip("/").casefold()
+        if not _PORNHUB_SLUG_RE.match(slug):
+            raise FollowSourceError(f"pornhub 的 ref 必须是人物 slug，收到：{ref!r}")
+        base = _known_base(slug)
+        common, response = self._request(
+            _with_page(base, page), ref=slug, etag=etag,
+            last_modified=last_modified, page=page,
+            headers={"Accept": "text/html"})
+        if response is None:
+            return SourceFetch(not_modified=True, **common)
+        if page == 0:
+            confirmed = self.canonical_base(response.body, slug)
+            if confirmed and confirmed != base:
+                # 页型认错了：用页面自己给的地址再取一次，这一轮的结果以它为准。
+                _remember_base(slug, confirmed)
+                common, response = self._request(
+                    _with_page(confirmed, page), ref=slug, etag=None,
+                    last_modified=None, page=page,
+                    headers={"Accept": "text/html"})
+                if response is None:
+                    return SourceFetch(not_modified=True, **common)
+            elif confirmed:
+                _remember_base(slug, confirmed)
+        soup = BeautifulSoup(response.body, "html.parser")
+        seen: set[str] = set()
+        listed: list[FollowCandidate] = []
+        for card in soup.select("li.pcVideoListItem"):
+            candidate = self._candidate(card)
+            if candidate is None or candidate.external_id in seen:
+                continue
+            seen.add(candidate.external_id)
+            listed.append(candidate)
+            if len(listed) >= self.max_items:
+                break
+        if not listed:
+            if page:
+                raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowSourceError(
+                "pornhub 人物页没有解析出任何作品：页面结构可能已变，"
+                "或这个人物页不存在")
+        candidates: list[FollowCandidate] = []
+        probed = 0
+        for candidate in listed:
+            if not self.within_history(candidate):
+                continue
+            enriched = candidate
+            if str(candidate.external_id) in self.enrich_skip or probed >= self.enrich_budget:
+                enriched = replace(candidate, partial=True)
+            else:
+                probed += 1
+                enriched = self._probe_detail(candidate)
+            candidates.append(enriched)
+            self.publish_candidate(enriched)
+        return SourceFetch(candidates=tuple(candidates), probed=probed,
+                           raw_body=response.body, **common)
+
+    @classmethod
+    def clear_known_bases(cls) -> None:
+        """忘掉已发现的页型。站点换了页型或测试要干净起点时用。"""
+        _PORNHUB_BASES.clear()
+
+    @classmethod
+    def canonical_base(cls, body: bytes, slug: str) -> str | None:
+        """页面自己声明的视频页地址；认不出或不是这个 slug 就是 None。"""
+        soup = BeautifulSoup(body, "html.parser")
+        node = soup.select_one('link[rel="canonical"]')
+        href = str(node.get("href") or "") if node is not None else ""
+        matched = _PORNHUB_PATH_RE.match(urllib.parse.urlsplit(href).path or "")
+        if not matched or matched.group(2).casefold() != slug.casefold():
+            return None
+        return f"https://www.pornhub.com/{matched.group(1)}/{matched.group(2)}/videos"
+
+    def _candidate(self, card) -> FollowCandidate | None:
+        viewkey = str(card.get("data-video-vkey") or "").strip()
+        if not viewkey:
+            return None
+        anchor = card.select_one("a[href*='view_video.php']")
+        title = plain_text(anchor.get("title")) if anchor is not None else None
+        if not title:
+            node = card.select_one(".title") or card.select_one(".thumb_title")
+            title = plain_text(node.get_text(" ")) if node else None
+        thumb = card.select_one("img")
+        thumb_url = None
+        if thumb is not None:
+            # `data-image` 是这一条的封面图；`data-mediabook` 是几小时的签名预览片，
+            # 记下来只会变成一批过期地址。
+            thumb_url = thumb.get("data-image") or thumb.get("src")
+            if isinstance(thumb_url, str) and thumb_url.startswith("data:"):
+                thumb_url = None
+        duration = card.select_one("var.duration") or card.select_one(".duration")
+        added = card.select_one(".added")
+        added_text = plain_text(added.get_text(" ")) if added is not None else None
+        return FollowCandidate(
+            provider=self.provider,
+            external_id=viewkey,
+            title=title or f"video {viewkey}",
+            url=f"https://www.pornhub.com/view_video.php?viewkey={viewkey}",
+            thumb_url=thumb_url if isinstance(thumb_url, str) else None,
+            published_at=_iso_from_relative(added_text),
+            duration=_duration_seconds(plain_text(duration.get_text(" ")) if duration else None),
+            extra={"added_text": added_text,
+                   "published_precision": "approximate" if added_text else "unknown",
+                   "media_kind": "video"},
+        )
+
+    def _probe_detail(self, candidate: FollowCandidate) -> FollowCandidate:
+        """详情页补精确时间、分类、标签与上传者；失败时保留列表候选。
+
+        列表页只有「3 days ago」，精确到分钟的发布时间、分类和标签都只在详情页。
+        失败的候选标成 `partial`：库里已有的精确值不会被相对时间盖掉，下次检查再补。
+        """
+        listed = replace(candidate, partial=True)
+        try:
+            response = self._get(candidate.url or "", headers={"Accept": "text/html"})
+            self._raise_if_rate_limited(response)
+            if response.status != 200:
+                return listed
+            detail = self._detail(response.body)
+        except FollowSourceRateLimited:
+            raise
+        except (FollowSourceError, OSError, httpx.HTTPError, ValueError):
+            return listed
+        if not detail:
+            return listed
+        return replace(
+            candidate, partial=False,
+            published_at=detail.get("published_at") or candidate.published_at,
+            duration=detail.get("duration") or candidate.duration,
+            extra={**candidate.extra, **detail.get("extra", {})})
+
+    def _detail(self, body: bytes) -> dict:
+        """作品页才有的几样：精确发布时间、分类、标签与上传者。
+
+        `uploadDate` 是这条链路上唯一精确到分钟的发布时间；列表只给相对写法。
+        分类与标签分属两档：分类是站点的题材归属，标签是内容描述。上传者按 `artist`
+        记——这个站的「作者」就是出镜的那位。
+        """
+        soup = BeautifulSoup(body, "html.parser")
+        published = _pornhub_upload_date(soup, body)
+        duration_node = soup.select_one('meta[property="video:duration"]')
+        try:
+            duration = float(duration_node.get("content") or 0) if duration_node else None
+        except (TypeError, ValueError):
+            duration = None
+        uploader = soup.select_one(".usernameWrap a")
+        author = None
+        if uploader is not None:
+            author = plain_text(uploader.get("title")) or plain_text(uploader.get_text(" "))
+        categories = _unique_texts(soup.select(".categoriesWrapper a"))
+        tags = _unique_texts(soup.select(".tagsWrapper a"))
+        models = [author] if author else []
+        if not published and not categories and not tags and not author:
+            return {}
+        tag_types = {tag: "general" for tag in tags}
+        tag_types.update({category: "metadata" for category in categories})
+        tag_types.update({model: "artist" for model in models})
+        return {
+            "published_at": published,
+            "duration": duration,
+            # `tag_types` 是补齐判据：有它表示这一条的详情页取到过。
+            "extra": {
+                **({"published_precision": "exact"} if published else {}),
+                **({"author": author} if author else {}),
+                **({"models": models} if models else {}),
+                "tags": tags,
+                "categories": categories,
+                "tag_types": tag_types,
+                "media_kind": "video",
+            },
+        }
+
+
+def _known_base(slug: str) -> str:
+    remembered = _PORNHUB_BASES.get(slug)
+    if remembered and remembered[0] > time.monotonic():
+        return remembered[1]
+    return PornhubConnector.BASE_TEMPLATE.format(slug=slug)
+
+
+def _remember_base(slug: str, base: str) -> None:
+    _PORNHUB_BASES[slug] = (time.monotonic() + _PORNHUB_BASE_TTL, base)
+
+
+def _with_page(base: str, page: int) -> str:
+    # 页码从 1 起，站点自己分页。翻过最后一页是 404。
+    return f"{base}?page={page + 1}" if page else base
+
+
+def _pornhub_upload_date(soup, body: bytes) -> str | None:
+    """作品页声明的发布时间。
+
+    先读 JSON-LD 的 `VideoObject`——页面里的相关推荐也可能带 `uploadDate` 字样，
+    整页正则撞上哪条全看排版；结构化数据说的是这一条作品。结构化数据缺失时才退回
+    整页正则，那种情况只在改版后出现。
+    """
+    for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        try:
+            payload = json.loads(node.get_text() or "{}")
+        except (TypeError, ValueError):
+            continue
+        rows = payload if isinstance(payload, list) else [payload]
+        for row in rows:
+            if isinstance(row, dict) and row.get("uploadDate"):
+                matched = _iso_from_text(row.get("uploadDate"))
+                if matched:
+                    return matched
+    matched = _PORNHUB_UPLOAD_DATE_RE.search(body.decode("utf-8", errors="replace"))
+    return _iso_from_text(matched.group(1)) if matched else None
+
+
+def _unique_texts(nodes) -> list[str]:
+    """一组链接的文字，去空白、去重、保持站点顺序。"""
+    seen: set[str] = set()
+    values: list[str] = []
+    for node in nodes:
+        text = plain_text(node.get("title")) or plain_text(node.get_text(" "))
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(text)
+    return values
+
+
 class F95ZoneConnector(_BaseConnector):
     """f95zone.to 的线程追更。
 
@@ -3057,7 +3336,7 @@ def parse_source_url(raw_url: str) -> ParsedSource:
 _CONNECTOR_CLASSES: tuple[type, ...] = (
     FanboxConnector, PatreonConnector, SubscribeStarConnector, KemonoConnector,
     Rule34VideoConnector, Rule34XxxConnector, Rule34PahealConnector,
-    F95ZoneConnector, SimpCityConnector,
+    PornhubConnector, F95ZoneConnector, SimpCityConnector,
 )
 
 CONNECTORS: dict[str, type] = {

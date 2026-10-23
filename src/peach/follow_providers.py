@@ -108,6 +108,13 @@ PROVIDERS: dict[str, ProviderSpec] = {
                      source_url="https://rule34.paheal.net/post/list/{ref}/1",
                      hosts=("paheal.net", "paheal-cdn.net"),
                      url_hosts=("rule34.paheal.net",), priority=45, backfill=True),
+        # 正片站：模特／演员的个人页，条目就是作品本身。
+        # `hosts` 只放 `phncdn`：分片、子播放列表与缩略图全在它的子域下
+        # （`ev-h.phncdn.com`、`pix-cdn77.phncdn.com`），站点自己的主机只出页面。
+        ProviderSpec("pornhub", "Pornhub",
+                     source_url="https://www.pornhub.com/model/{ref}/videos",
+                     hosts=("phncdn.com",), url_hosts=("pornhub.com",),
+                     priority=55, backfill=True),
         # 论坛：每个条目是同一作品的一次发布，不是独立作品。
         ProviderSpec("f95zone", "F95zone", source_url="https://f95zone.to/threads/{ref}/",
                      semantics="release", hosts=("f95zone.to",), url_hosts=("f95zone.to",),
@@ -162,6 +169,19 @@ def url_hosts() -> dict[str, str]:
     `creator.fanbox.cc` 和 `api.rule34.xxx` 都不必单独登记。
     """
     return {host: key for key, spec in PROVIDERS.items() for host in spec.url_hosts}
+
+
+def page_hosts() -> dict[str, tuple[str, ...]]:
+    """来源键 → 它的作品页所在主机，是 `url_hosts` 的反向投影。
+
+    `hosts` 是媒体代理的白名单，与页面主机不是同一件事（paheal 的页面在
+    `rule34.paheal.net`、媒体在 `paheal-cdn.net`）。播放时要去详情页解析正片的
+    来源按这一份判「这条作品页能不能取」。
+    """
+    table: dict[str, list[str]] = {}
+    for host, key in url_hosts().items():
+        table.setdefault(key, []).append(host)
+    return {key: tuple(value) for key, value in table.items()}
 
 
 def provider_for_host(host: str) -> str:

@@ -8,8 +8,9 @@ import httpx
 from peach import http as peach_http
 from peach.follow_stream import (
     MAX_PROXY_REDIRECTS, FollowMediaResolver, FollowMediaUnavailable,
-    FollowProxyError, ResolvedFollowMedia, open_upstream, proxy_request_headers,
-    proxyable,
+    FollowProxyError, ResolvedFollowMedia, media_type, open_upstream,
+    pornhub_media_definitions, proxy_request_headers, proxyable,
+    resolvable_at_play, rewrite_follow_playlist,
 )
 from peach.follow_secrets import Credential
 from peach.http import HttpResponse
@@ -484,3 +485,109 @@ class ProxyUpstreamTests(unittest.TestCase):
         self.assertEqual(headers["Referer"], "https://kemono.cr/post/7")
         self.assertEqual(headers["Cookie"], "source_session=fixture")
         self.assertNotIn("Authorization", headers)
+
+
+PORNHUB_WATCH_PAGE = b"""<html><body><script>
+VIDEO_SHOW = {
+  "mediaDefinitions": [
+    {"format": "hls", "height": 1080, "width": 1920, "quality": "1080",
+     "defaultQuality": false, "videoUrl": "https://ev-h.phncdn.com/hls/1080/master.m3u8?validfrom=1&validto=2"},
+    {"format": "hls", "height": 720, "width": 1280, "quality": "720",
+     "defaultQuality": true, "videoUrl": "https://ev-h.phncdn.com/hls/720/master.m3u8?validfrom=1&validto=2"},
+    {"format": "hls", "height": 480, "width": 852, "quality": "480",
+     "defaultQuality": false, "videoUrl": "https://ev-h.phncdn.com/hls/480/master.m3u8?validfrom=1&validto=2"},
+    {"format": "mp4", "remote": true, "quality": [],
+     "videoUrl": "https://www.pornhub.com/video/get_media?s=opaque&v=6aad2df8d45f5"}
+  ]
+};
+</script></body></html>"""
+
+PORNHUB_MASTER = b"""#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2559320,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"
+index-v1-a1.m3u8
+"""
+
+
+def _pornhub_item(item_id: int = 7, metadata=None) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=item_id, provider="pornhub",
+        url="https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+        media_url=None, metadata=metadata or {"media_kind": "video"},
+    )
+
+
+class PornhubPlaybackTests(unittest.TestCase):
+    """只有 HLS 的来源：正片在按下播放时才解析，分片经 Peach 的键取回。"""
+
+    def test_the_watch_page_yields_a_playlist_with_every_quality(self):
+        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolved = resolver.resolve(_pornhub_item())
+        self.assertTrue(resolved.playlist)
+        self.assertEqual([height for height, _ in resolved.qualities], [1080, 720, 480])
+        self.assertEqual(resolved.url, resolved.qualities[0][1])
+        self.assertEqual(resolved.allowed_hosts, ("phncdn.com",))
+        self.assertEqual(resolved.referer, "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5")
+        # `format=mp4` 那条指向一个匿名取不到内容的接口，不当作可播地址。
+        self.assertNotIn("get_media", resolved.url)
+
+    def test_a_requested_height_switches_playlist_without_refetching(self):
+        requests = []
+
+        def transport(request, timeout, max_bytes):
+            requests.append(request.url)
+            return HttpResponse(200, {}, PORNHUB_WATCH_PAGE)
+
+        resolver = FollowMediaResolver(transport)
+        resolver.resolve(_pornhub_item())
+        chosen = resolver.resolve(_pornhub_item(), height=480)
+        self.assertIn("/hls/480/", chosen.url)
+        self.assertEqual(len(requests), 1)
+
+    def test_playlist_children_become_peach_keys_and_stay_reachable(self):
+        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolved = resolver.resolve(_pornhub_item())
+        rewritten = rewrite_follow_playlist(
+            PORNHUB_MASTER, "https://ev-h.phncdn.com/hls/720/master.m3u8?validto=2",
+            item_id=7, root=resolved.url, provider="pornhub", resolver=resolver).decode()
+        children = [line for line in rewritten.splitlines() if line and not line.startswith("#")]
+        self.assertEqual(len(children), 1)
+        self.assertTrue(children[0].startswith("/follow-hls?id=7&r="))
+        self.assertNotIn("phncdn", rewritten)
+        key = children[0].split("r=")[1]
+        # 相对地址按 URL 语义解析：基础地址上的查询串不会跟到子清单上。
+        self.assertEqual(resolver.resource(7, key),
+                         "https://ev-h.phncdn.com/hls/720/index-v1-a1.m3u8")
+
+    def test_a_playlist_child_outside_the_source_hosts_is_refused(self):
+        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolved = resolver.resolve(_pornhub_item())
+        body = b"#EXTM3U\n#EXTINF:1,\nhttps://elsewhere.example/seg.ts\n"
+        with self.assertRaises(FollowProxyError):
+            rewrite_follow_playlist(body, resolved.url, item_id=7, root=resolved.url,
+                                    provider="pornhub", resolver=resolver)
+
+    def test_a_key_from_another_item_is_not_readable(self):
+        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolved = resolver.resolve(_pornhub_item(7))
+        key = resolver.register_resource(7, resolved.url, "https://ev-h.phncdn.com/hls/720/x.m3u8")
+        with self.assertRaises(FollowMediaUnavailable):
+            resolver.resource(8, key)
+
+    def test_media_definitions_are_read_out_of_the_escaped_script(self):
+        escaped = PORNHUB_WATCH_PAGE.replace(b'"', b'\\"')
+        entries = pornhub_media_definitions(escaped.decode("utf-8"))
+        self.assertEqual([row["height"] for row in entries], [1080, 720, 480])
+        self.assertTrue(all(row["format"] == "hls" for row in entries))
+
+    def test_a_page_without_definitions_resolves_to_nothing(self):
+        self.assertEqual(pornhub_media_definitions("<html></html>"), ())
+        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, b"<html></html>"))
+        with self.assertRaises(FollowMediaUnavailable):
+            resolver.resolve(_pornhub_item())
+
+    def test_playability_of_hls_sources_follows_the_page_url(self):
+        self.assertTrue(resolvable_at_play("pornhub", "https://cn.pornhub.com/model/x/videos"))
+        self.assertFalse(resolvable_at_play("pornhub", "https://example.com/model/x"))
+        self.assertFalse(resolvable_at_play("kemono", "https://kemono.cr/fanbox/user/1"))
+        self.assertEqual(media_type("pornhub", None), "application/vnd.apple.mpegurl")
+        self.assertEqual(media_type("kemono", "https://img.kemono.cr/a.webm"), "video/webm")
