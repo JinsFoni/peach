@@ -440,11 +440,26 @@ class ModuleConstantTests(unittest.TestCase):
 
     def test_location_declarations_stay_in_ledger_shape(self):
         # `asset.path` 与配置中的路径前缀均使用 Windows 格式，供目录访问权限检查匹配。
-        self.assertEqual(set(config.LOCATION_ROOT_DECLARATIONS), {"local", "115", "pikpak"})
-        self.assertEqual(
-            tuple(root for roots in config.LOCATION_ROOT_DECLARATIONS.values() for root in roots),
-            config.MEDIA_ROOT_DECLARATIONS,
-        )
+        # 这台机器旁边若已有一份真实部署，模块常量读的是那份设置文件；断言因此落在
+        # 隔离出来的「全新部署」上：内置默认按账本口径声明三个来源。
+        with TempTree() as tree, patch.dict(
+                os.environ, {"PEACH_DATA_ROOT": str(tree.data_root)}):
+            settings_file.reset_cache()
+            try:
+                reloaded = importlib.reload(config)
+                self.assertEqual(set(reloaded.LOCATION_ROOT_DECLARATIONS),
+                                 {"local", "115", "pikpak"})
+                self.assertEqual(
+                    tuple(root for roots in reloaded.LOCATION_ROOT_DECLARATIONS.values()
+                          for root in roots),
+                    reloaded.MEDIA_ROOT_DECLARATIONS,
+                )
+                for root in reloaded.MEDIA_ROOT_DECLARATIONS:
+                    self.assertRegex(root, r"^[A-Za-z]:",
+                                     "声明要用账本口径的 Windows 路径")
+            finally:
+                settings_file.reset_cache()
+                importlib.reload(config)
 
     def test_settings_dataclass_reports_the_configured_state(self):
         from peach.config import PeachSettings
