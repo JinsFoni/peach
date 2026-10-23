@@ -1,13 +1,26 @@
 # Pornhub 人物页、作品页与 HLS 清单证据
 
-- 取证日期：2026-10-23
-- 用途：新增 `pornhub` 追更来源的列表解析、详细时间与标签、播放地址解析。
+- 取证日期：2026-10-23（英文站）、2026-10-24（中文站与中文分类／标签）
+- 用途：`pornhub` 追更来源的列表解析、详细时间与标签、播放地址解析，以及抓取站为什么是
+  `cn.pornhub.com`。
 - 凭据保护：全程匿名（不带 Cookie、不登录），只记录状态码、DOM 结构、主机名与字段名。
   签名地址里的查询串一律写成 `?…`，不落任何 token。
 
+## 抓取站：中文站
+
+- `GET https://cn.pornhub.com/...` 与 `GET https://www.pornhub.com/...` 的响应结构一致。
+- `www.pornhub.com` 带 `Accept-Language: zh-CN` 时 302 到 `cn.pornhub.com`；不带语言头
+  时回 200 的英文页。连接器因此直接取中文站，少一跳。
+- 差别只在字面：同一个作品，英文站分类是 `Teen`／`Asian`／`Big Ass`，中文站是
+  「18-25歲」／「亚洲人」／「大屁股」；标签同理，且中文标签的 `<a>` 带
+  `data-translated="translated-tags"`、没有 `title`，字在 `<span>` 里。
+- 标签只有站点有译文的那些是中文，其余保留上传者的原文（2026-10-24 实测同一条作品：
+  「震动棒」「亚洲素人」「日本无码」与 `vibrator`、`asian amateur` 并存）。
+- 作品标题是上传者自己写的，站点只对一部分给了译文，不能当成语言开关。
+
 ## 人物页
 
-请求：`GET https://www.pornhub.com/model/mini-diva/videos`，标准桌面 Chrome UA。
+请求：`GET https://cn.pornhub.com/model/mini-diva/videos`，标准桌面 Chrome UA。
 
 - HTTP 200，约 1.1 MB HTML，列表**在服务端渲染**：44 张卡片直接出现在响应里，
   没有验证码、没有质询页。
@@ -18,6 +31,7 @@
   `var.duration` 是时长（`15:04`）；`.added` 是**相对**时间（`3 days ago`）。
 - 卡片还带 `img[data-mediabook]`（签名 webm 预览片，`validto` 只有约两小时）。
   它不入库：过期后就是一条取不到的地址。
+- 页面声明 `<meta charset="utf-8">`；按字节交给解析器时靠它才不会把中文读成乱码。
 
 ### 分页
 
@@ -36,15 +50,18 @@
 直接请求 `/model/<职业演员>/videos` 会得到 HTTP 200 但**只列 23 条**，而
 `/pornstar/<slug>/videos` 同一时刻是 49 条。页型只认 `<link rel="canonical">`：
 
-- `/model/lana-rhoades/videos` → canonical `https://www.pornhub.com/pornstar/lana-rhoades`
+- `/model/lana-rhoades/videos` → canonical `https://cn.pornhub.com/pornstar/lana-rhoades`
 - `/model/mini-diva/videos` → canonical 指向自己
 - `/users/<账号>/videos` → canonical 指向自己
 
+canonical 的**主机**不参与判断：落在 `cn`／`www`／别的地区站都只取路径里的页型与
+slug，抓取站固定是 `cn.pornhub.com`。
+
 ## 作品页
 
-请求：`GET https://www.pornhub.com/view_video.php?viewkey=<13 位 vkey>`。
+请求：`GET https://cn.pornhub.com/view_video.php?viewkey=<13 位 vkey>`。
 
-- HTTP 200，约 1.5 MB。
+- HTTP 200，约 1.6 MB。
 - JSON-LD 里 `"uploadDate": "2026-09-18T12:47:42+00:00"`：精确发布时间，列表没有。
 - `<meta property="video:duration" content="904">`：秒数。
 - `.usernameWrap a`：上传者显示名（作品页的「作者」就是出镜者）。
@@ -59,6 +76,10 @@
 | --- | --- | --- |
 | `hls` | 1080 / 720 / 480 / 240 四档，各自一个 `master.m3u8` | HTTP 200，`application/vnd.apple.mpegurl` |
 | `mp4` | `remote: true`，指向 `/video/get_media?s=…&v=…` | 匿名请求返回空数组 `[]` |
+
+2026-10-24 在中文站复测同一形状：`mediaDefinitions` 只有四条 `format: "hls"`
+（1080／720／480／240，主机 `ev-h.phncdn.com`，`segmentFormats` 是
+`mpeg2_ts` + `ts_aac`），没有 mp4 条目。
 
 - 清单地址主机形如 `ev-h.phncdn.com` / `hv-h.phncdn.com`，带 `validfrom`、`validto`
   等签名参数，`validto` 距取回时刻约 1 小时。
