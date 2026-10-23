@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image, ImageDraw
 
@@ -75,6 +76,10 @@ def load_script(name: str):
 class PortraitGapTests(unittest.TestCase):
     def setUp(self):
         self.module = load_script("fill_portrait_gaps")
+        # 装图会顺手探一次脸框；真探针要下 YuNet 的模型，测试里用空记录顶掉。
+        probe = mock.patch("peach.avatar_provider.FaceProbe")
+        probe.start().return_value.return_value = None
+        self.addCleanup(probe.stop)
         self.root = Path(tempfile.mkdtemp()).resolve()
         self.database = fresh_ledger(self.root)
         self.avatars = self.root / "avatars"

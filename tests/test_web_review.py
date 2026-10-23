@@ -3163,6 +3163,11 @@ class PerformerAvatarApplyTests(ReviewQueueTests):
 
     def setUp(self):
         super().setUp()
+        # 装图会顺手探一次脸框；真探针要下 YuNet 的模型，这里用「检不出」顶掉。
+        for target in ("peach.avatar_face.FaceProbe", "peach.avatar_provider.FaceProbe"):
+            probe = mock.patch(target)
+            probe.start().return_value.return_value = None
+            self.addCleanup(probe.stop)
         con = sqlite3.connect(self.db_path)
         # 基建的 entity 1 留给 creator_tags 用例；头像落盘另立 performer 9。
         # 名字不能与父类用例插入的「释爱丽丝」撞 UNIQUE(kind, normalized_name)。

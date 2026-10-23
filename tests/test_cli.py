@@ -578,6 +578,7 @@ class ReplicationAssemblyTests(unittest.TestCase):
         settings = mock.Mock(db_path=Path("/nonexistent/local.db"))
         output = io.StringIO()
         with mock.patch.object(cli, "REPLICATION_ENABLED", enabled), \
+                mock.patch.object(cli, "device_id", return_value="test-device"), \
                 mock.patch.object(cli, "LedgerSync") as ledger_sync, \
                 redirect_stdout(output):
             sync = cli._build_sync(args, settings)

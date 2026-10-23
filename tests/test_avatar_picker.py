@@ -867,6 +867,7 @@ class AvatarPickerRouteTests(unittest.TestCase):
 
     def setUp(self):
         from fastapi.testclient import TestClient
+        from peach import routes_media
         from peach.api import create_app
         from peach.config import PeachSettings
 
@@ -881,6 +882,8 @@ class AvatarPickerRouteTests(unittest.TestCase):
         seed_person(database)
         self.face = mock.patch("peach.avatar_provider.FaceProbe").start()
         self.face.return_value.return_value = None
+        # 取景这条路走的是 route 里那个共用探针；不挡住它就等于让测试去下 YuNet 模型。
+        mock.patch.object(routes_media._WORK_FACE_PROBE, "on_bytes", return_value=None).start()
         self.addCleanup(mock.patch.stopall)
         self.app = create_app(PeachSettings(
             db_path=database, configured=True, token="secret",
