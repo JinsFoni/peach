@@ -2164,6 +2164,21 @@ _PORNHUB_BASES: dict[str, tuple[float, str]] = {}
 _PORNHUB_BASE_TTL = 6 * 3600
 
 
+def _pornhub_video_cards(soup) -> list:
+    """这个人的作品卡。
+
+    站内导航的「最热」「推荐」下拉里，推广卡用的是同一个 `li.pcVideoListItem`
+    类名，挂在 `div.headerSubMenu` 下面，时间字面写成「56年前」。照类名全取会把这些
+    别人的作品当成他的（2026-10-24 实测：44 张卡里 4 张是导航卡，主页实际 40 条）。
+    人物自己的视频列表在 `div.profileVids` 里，取不到才退回全页（改版兼容）。
+    """
+    cards = soup.select("div.profileVids li.pcVideoListItem")
+    if cards:
+        return cards
+    return [card for card in soup.select("li.pcVideoListItem")
+            if card.find_parent(class_="headerSubMenu") is None]
+
+
 class PornhubConnector(_BaseConnector):
     """pornhub.com 的人物页：列表是 HTML，详情页给精确时间、分类与标签。
 
@@ -2235,7 +2250,7 @@ class PornhubConnector(_BaseConnector):
         soup = BeautifulSoup(response.body, "html.parser")
         seen: set[str] = set()
         listed: list[FollowCandidate] = []
-        for card in soup.select("li.pcVideoListItem"):
+        for card in _pornhub_video_cards(soup):
             candidate = self._candidate(card)
             if candidate is None or candidate.external_id in seen:
                 continue

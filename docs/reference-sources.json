@@ -1090,8 +1090,8 @@
       "url": "https://cn.pornhub.com/model/mini-diva/videos",
       "snapshot": "docs/reference-snapshots/follow-pornhub-hls.md",
       "checked_on": "2026-10-24",
-      "sha256": "50cdc88a2fc479fce53e00896c9ca38fc6c9a9d2c13cf11434a2aa44ee550571",
-      "role": "追更来源 pornhub 的抓取站选择（中文站给中文分类与标签）、列表结构与由 vkey 反推的列表时间、页型归一、详细时间与标签来源，以及「只有 HLS、没有渐进式 mp4」的播放边界证据。",
+      "sha256": "6ee4893869c7da1b8364717fc2410637d676b9ef997f4a9faab4cf310d7065b3",
+      "role": "追更来源 pornhub 的抓取站选择（中文站给中文分类与标签）、只取本人列表的选择器、由 vkey 反推的列表时间、页型归一、详细时间与标签来源，以及「只有 HLS、没有渐进式 mp4」的播放边界证据。",
       "consumers": [
         "src/peach/follow_providers.py",
         "src/peach/follow_sources.py",
