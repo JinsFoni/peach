@@ -2142,10 +2142,19 @@ class PornhubConnector(_BaseConnector):
     """pornhub.com 的人物页：列表是 HTML，详情页给精确时间、分类与标签。
 
     `ref` 是人物 slug，例如 `mini-diva`。三种人物页（认证模特、职业演员、普通账号）
-    归一到同一个 ref：抓取统一走 `www.pornhub.com`，页型按 canonical 认。
+    归一到同一个 ref：抓取统一走中文站 `cn.pornhub.com`，页型按 canonical 认。
+
+    抓中文站是为了页面上的字面：同一个作品，英文站给 `Teen`／`Asian`／`Big Ass`，
+    中文站给「18-25歲」／「亚洲人」／「大屁股」，标签同理（详情页带
+    `data-translated="translated-tags"`）。作品标题是上传者自己写的，站点不翻译。
     """
 
     provider = "pornhub"
+    #: 抓取站与条目地址都落在这里。`www.pornhub.com` 收到 `Accept-Language: zh-CN`
+    #: 会 302 到中文站，直接取省一跳。
+    SITE = "https://cn.pornhub.com"
+    #: 声明中文，站点据此下发中文页面。
+    ACCEPT_LANGUAGE = "zh-CN,zh;q=0.8"
     #: 翻过最后一页时人物页回 404。2026-10-23 实测高产量演员从第 10 页起回 404，
     #: 站点本身对深翻页有上限，回填因此也是有界的。
     HISTORY_END_STATUSES = (404,)
@@ -2154,7 +2163,7 @@ class PornhubConnector(_BaseConnector):
     #: 补齐之后 metadata 里会有 `tag_types`；与 rule34video 共用同一条判据。
     ENRICHED_MARK = "tag_types"
     #: 没有认过页型时先按模型页取，再按 canonical 纠正。
-    BASE_TEMPLATE = "https://www.pornhub.com/model/{slug}/videos"
+    BASE_TEMPLATE = SITE + "/model/{slug}/videos"
 
     @classmethod
     def parse_url(cls, provider: str, parsed: urllib.parse.SplitResult,
@@ -2163,12 +2172,12 @@ class PornhubConnector(_BaseConnector):
         if not matched:
             raise FollowSourceError(
                 "pornhub 的链接要指向人物页，形如 "
-                "https://www.pornhub.com/model/mini-diva/videos")
+                f"{cls.SITE}/model/mini-diva/videos")
         kind, slug, tab = matched.group(1), matched.group(2), (matched.group(3) or "").lower()
         if tab and tab != "videos":
             raise FollowSourceError(f"只订阅视频页，不订阅 /{tab}")
         # 链接里那一段就是页型，先记下；抓取时 canonical 说了算。
-        base = f"https://www.pornhub.com/{kind}/{slug}"
+        base = f"{cls.SITE}/{kind}/{slug}"
         _remember_base(slug.casefold(), base + "/videos")
         return ParsedSource("pornhub", slug.casefold(), base + "/videos", _slug_label(slug))
 
@@ -2235,16 +2244,25 @@ class PornhubConnector(_BaseConnector):
         """忘掉已发现的页型。站点换了页型或测试要干净起点时用。"""
         _PORNHUB_BASES.clear()
 
+    def _headers(self) -> dict[str, str]:
+        headers = super()._headers()
+        headers["Accept-Language"] = self.ACCEPT_LANGUAGE
+        return headers
+
     @classmethod
     def canonical_base(cls, body: bytes, slug: str) -> str | None:
-        """页面自己声明的视频页地址；认不出或不是这个 slug 就是 None。"""
+        """页面自己声明的视频页地址；认不出或不是这个 slug 就是 None。
+
+        只看路径里的页型与 slug：canonical 落在哪个主机（`cn`／`www`／别的地区站）
+        不改变这个人在本站的地址，抓取站固定是 `SITE`。
+        """
         soup = BeautifulSoup(body, "html.parser")
         node = soup.select_one('link[rel="canonical"]')
         href = str(node.get("href") or "") if node is not None else ""
         matched = _PORNHUB_PATH_RE.match(urllib.parse.urlsplit(href).path or "")
         if not matched or matched.group(2).casefold() != slug.casefold():
             return None
-        return f"https://www.pornhub.com/{matched.group(1)}/{matched.group(2)}/videos"
+        return f"{cls.SITE}/{matched.group(1)}/{matched.group(2)}/videos"
 
     def _candidate(self, card) -> FollowCandidate | None:
         viewkey = str(card.get("data-video-vkey") or "").strip()
@@ -2270,7 +2288,7 @@ class PornhubConnector(_BaseConnector):
             provider=self.provider,
             external_id=viewkey,
             title=title or f"video {viewkey}",
-            url=f"https://www.pornhub.com/view_video.php?viewkey={viewkey}",
+            url=f"{self.SITE}/view_video.php?viewkey={viewkey}",
             thumb_url=thumb_url if isinstance(thumb_url, str) else None,
             published_at=_iso_from_relative(added_text),
             duration=_duration_seconds(plain_text(duration.get_text(" ")) if duration else None),

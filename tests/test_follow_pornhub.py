@@ -1,8 +1,10 @@
 """Pornhub 人物页连接器的隔离测试。
 
-夹具的字段名与 DOM 结构取自 2026-10-23 对 `www.pornhub.com` 的实测响应：列表卡是
-`li.pcVideoListItem`（`data-video-vkey` 是作品身份），详情页把 `uploadDate` 写在
-JSON-LD 里、分类与标签各在一个容器里。测试本身不联网：transport 全部注入。
+夹具的字段名与 DOM 结构取自 2026-10-23／2026-10-24 对 `cn.pornhub.com` 的实测响应：
+列表卡是 `li.pcVideoListItem`（`data-video-vkey` 是作品身份），详情页把 `uploadDate`
+写在 JSON-LD 里、分类与标签各在一个容器里，中文站的分类与标签是中文（标签那侧还带
+`data-translated="translated-tags"`，没有 `title`，字在 `<span>` 里）。测试本身不联网：
+transport 全部注入。
 """
 import unittest
 import urllib.parse
@@ -69,6 +71,26 @@ DETAIL = b"""<html><head>
 </body></html>"""
 
 
+CHINESE_DETAIL = """<html><head>
+<meta charset="utf-8" />
+<meta property="video:duration" content="904" />
+<script type="application/ld+json">{"@type": "VideoObject",
+ "uploadDate": "2026-09-18T12:47:42+00:00"}</script>
+</head><body>
+<div class="usernameWrap"><a href="/model/mini-diva" title="Mini Diva">Mini Diva</a></div>
+<div class="categoriesWrapper">
+  <p>分类&nbsp;</p>
+  <a href="/categories/teen">18-25歲</a>
+  <a href="/video?c=1">亚洲人</a>
+</div>
+<div class="tagsWrapper">
+  <p>标签</p>
+  <a data-translated="translated-tags" href="/video/search?search=%E8%82%9B"><span>肛门性爱</span></a>
+  <a data-translated="translated-tags" href="/video/search?search=%E5%A4%A7"><span>大屁股</span></a>
+</div>
+</body></html>""".encode("utf-8")
+
+
 class PornhubPersonPageParsingTests(unittest.TestCase):
     def setUp(self):
         # 页型是按 slug 记住的：上一个用例的发现不能漏到这一个。
@@ -82,8 +104,20 @@ class PornhubPersonPageParsingTests(unittest.TestCase):
             with self.subTest(url=url):
                 parsed = parse_source_url(url)
                 self.assertEqual(parsed.provider, "pornhub")
-                self.assertTrue(parsed.url.startswith("https://www.pornhub.com/"))
+                self.assertTrue(parsed.url.startswith("https://cn.pornhub.com/"))
                 self.assertTrue(parsed.url.endswith("/videos"))
+
+    def test_the_page_request_declares_chinese(self):
+        """中文站的字面取决于请求语言，抓到中文分类的前提是这一跳带上了中文。"""
+        requests = []
+        body = _page([_card("6aad2df8d45f5", "First work")],
+                     canonical="https://cn.pornhub.com/model/mini-diva/videos")
+        connector = build_connector("pornhub", transport=_transport(body=body, record=requests))
+        connector.fetch("mini-diva")
+        list_request = requests[0]
+        self.assertEqual(list_request.url, "https://cn.pornhub.com/model/mini-diva/videos")
+        language = {key.lower(): value for key, value in list_request.headers.items()}
+        self.assertTrue(language["accept-language"].startswith("zh-CN"))
 
     def test_a_tab_that_is_not_videos_is_refused(self):
         with self.assertRaises(Exception) as caught:
@@ -131,12 +165,13 @@ class PornhubPersonPageParsingTests(unittest.TestCase):
 
         connector = build_connector("pornhub", transport=transport)
         fetch = connector.fetch("lana-rhoades")
-        self.assertEqual(requests[0], "https://www.pornhub.com/model/lana-rhoades/videos")
-        self.assertEqual(requests[1], "https://www.pornhub.com/pornstar/lana-rhoades/videos")
+        self.assertEqual(requests[0], "https://cn.pornhub.com/model/lana-rhoades/videos")
+        # 夹具的 canonical 落在 `www`：页型认出来之后地址仍然收在本站，主机不跟着走。
+        self.assertEqual(requests[1], "https://cn.pornhub.com/pornstar/lana-rhoades/videos")
         self.assertEqual(len(fetch.candidates), 2)
         # 认过之后同一进程里不再多打一次模型页。
         again = connector.fetch("lana-rhoades")
-        self.assertEqual(requests[2:], ["https://www.pornhub.com/pornstar/lana-rhoades/videos"])
+        self.assertEqual(requests[2:], ["https://cn.pornhub.com/pornstar/lana-rhoades/videos"])
         self.assertEqual(len(again.candidates), 2)
 
     def test_the_detail_page_supplies_the_exact_time_categories_and_tags(self):
@@ -159,6 +194,21 @@ class PornhubPersonPageParsingTests(unittest.TestCase):
         self.assertEqual(item.extra["tag_types"]["Tag One"], "general")
         self.assertEqual(item.extra["tag_types"]["Amateur"], "metadata")
         self.assertEqual(item.extra["tag_types"]["Mini Diva"], "artist")
+
+    def test_a_chinese_detail_page_supplies_chinese_categories_and_tags(self):
+        """中文站的分类与标签是中文；标签没有 `title`，字在 `<span>` 里。"""
+        listing = _page([_card("6aad2df8d45f5", "First work")],
+                        canonical="https://cn.pornhub.com/model/mini-diva/videos")
+
+        def transport(request, timeout, max_bytes):
+            body = CHINESE_DETAIL if "view_video.php" in request.url else listing
+            return HttpResponse(200, {}, body)
+
+        item = build_connector("pornhub", transport=transport).fetch("mini-diva").candidates[0]
+        self.assertEqual(item.extra["categories"], ["18-25歲", "亚洲人"])
+        self.assertEqual(item.extra["tags"], ["肛门性爱", "大屁股"])
+        self.assertEqual(item.extra["tag_types"]["肛门性爱"], "general")
+        self.assertEqual(item.extra["tag_types"]["亚洲人"], "metadata")
 
     def test_a_missing_detail_page_keeps_the_listing_row_and_retries_later(self):
         listing = _page([_card("6aad2df8d45f5", "First work")],
@@ -196,6 +246,8 @@ class PornhubPersonPageParsingTests(unittest.TestCase):
 class PornhubRegistrationTests(unittest.TestCase):
     def test_the_provider_is_registered_once_and_projects_everywhere(self):
         self.assertEqual(follow_providers.PROVIDERS["pornhub"].label, "Pornhub")
+        self.assertEqual(follow_providers.PROVIDERS["pornhub"].source_url,
+                         "https://cn.pornhub.com/model/{ref}/videos")
         self.assertEqual(follow_providers.hosts()["pornhub"], ("phncdn.com",))
         self.assertEqual(follow_providers.page_hosts()["pornhub"], ("pornhub.com",))
         self.assertEqual(follow_providers.provider_for_host("cn.pornhub.com"), "pornhub")
@@ -208,7 +260,7 @@ class PornhubRegistrationTests(unittest.TestCase):
         parsed = parse_source_url("https://www.pornhub.com/model/mini-diva/videos")
         self.assertEqual((parsed.provider, parsed.ref), ("pornhub", "mini-diva"))
         self.assertEqual(parsed.semantics, "work")
-        self.assertEqual(urllib.parse.urlsplit(parsed.url).hostname, "www.pornhub.com")
+        self.assertEqual(urllib.parse.urlsplit(parsed.url).hostname, "cn.pornhub.com")
 
 
 if __name__ == "__main__":

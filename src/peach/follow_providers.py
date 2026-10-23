@@ -111,8 +111,9 @@ PROVIDERS: dict[str, ProviderSpec] = {
         # 正片站：模特／演员的个人页，条目就是作品本身。
         # `hosts` 只放 `phncdn`：分片、子播放列表与缩略图全在它的子域下
         # （`ev-h.phncdn.com`、`pix-cdn77.phncdn.com`），站点自己的主机只出页面。
+        # 站点地址取中文站：分类与标签只有中文站给中文（英文站回 `Teen`／`Asian`）。
         ProviderSpec("pornhub", "Pornhub",
-                     source_url="https://www.pornhub.com/model/{ref}/videos",
+                     source_url="https://cn.pornhub.com/model/{ref}/videos",
                      hosts=("phncdn.com",), url_hosts=("pornhub.com",),
                      priority=55, backfill=True),
         # 论坛：每个条目是同一作品的一次发布，不是独立作品。
