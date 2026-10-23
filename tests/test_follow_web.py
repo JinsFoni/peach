@@ -277,11 +277,29 @@ class FollowContractTests(unittest.TestCase):
         self.assertEqual(catalog['follow_thumb_url'], follow['thumb_url'])
         self.assertEqual(catalog['follow_tags'], follow['tags'])
         self.assertNotIn('artist_name', catalog['follow_tags'])
+        self.assertEqual(catalog['follow_media_type'], 'video/mp4')
         detail = self._get('/api/item', id=str(asset_id))
         self.assertEqual(detail['follow_item_id'], item.id)
+        self.assertEqual(detail['follow_media_type'], 'video/mp4')
         online = self._get('/api/facets', loc='online')
         self.assertEqual([row['k'] for row in online['follow_tags']], follow['tags'])
         self.assertEqual(self._get('/api/facets', loc='local')['follow_tags'], [])
+
+    def test_a_saved_hls_item_tells_the_player_which_source_type_it_is(self):
+        """只有 HLS 的来源报清单类型：卡片与详情用同一份判据，播放器据此选源。"""
+        self._seed(provider='pornhub', ref='mini-diva', label='Mini Diva',
+                   candidates=(FollowCandidate(
+                       provider='pornhub', external_id='6aad2df8d45f5',
+                       title='Demo video',
+                       url='https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5',
+                       extra={'media_kind': 'video'}),))
+        with self.contract.database.write_transaction() as connection:
+            item = FollowStore(lambda: connection).items()[0]
+            asset_id = FollowStore(lambda: connection).save_asset(item.id, confirm=True)
+        self.assertEqual(self._get('/api/items', loc='online')['items'][0]['follow_media_type'],
+                         'application/vnd.apple.mpegurl')
+        self.assertEqual(self._get('/api/item', id=str(asset_id))['follow_media_type'],
+                         'application/vnd.apple.mpegurl')
 
     def test_every_card_member_says_whether_it_is_a_version_or_a_piece(self):
         """卡片据 `variant_kind` 决定叠层翻不翻：alt 与 WIP 是同一段的另一版，翻过去
