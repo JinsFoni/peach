@@ -1,16 +1,26 @@
-"""Proxy targets for playing a follow candidate inside Peach.
+"""关注条目的可播地址解析与媒体代理。
 
-The browser receives only a Peach URL. Upstream URLs stay in the ledger/source layer, and
-Rule34Video's expiring signed URL is resolved only when the user explicitly presses play.
+浏览器只拿到 Peach 的地址，上游地址留在账本与来源层；签名地址在用户按下播放时才解析，
+过期也不会被抄进账本。
+
+两种形态：
+
+- 渐进式媒体（归档站、标签站、附件）：解析出一条直链，代理按 Range 转发。
+- 只有 HLS 的来源（Pornhub）：清单里没有可播的渐进式 mp4。播放器拿到一份 Peach 改写过的
+  `m3u8`，每一跳再换成分片键回来取（`rewrite_follow_playlist`）。改写复用 STRM 那条路径
+  的同一份实现（`preview_cache.rewrite_hls`），区别只在键表挂在本模块的解析器内存里。
 """
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 import logging
 import re
 import threading
 import time
 import urllib.parse
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 from typing import Callable, Mapping
 
@@ -53,6 +63,9 @@ class ResolvedFollowMedia:
     #: 边界由 `http.public_https_url` 与 `http.resolves_publicly` 守：明文、IP 字面量、
     #: 本机与局域网名字、解析到内网地址的主机仍然拒收。
     public_hosts: bool = False
+    #: `url` 是一份 HLS 清单而不是可整段转发的字节流。代理层据此改走清单改写，
+    #: 不能把 `#EXTM3U` 当视频发出去。
+    playlist: bool = False
 
     def __post_init__(self) -> None:
         if self.public_hosts and self.headers:
@@ -61,6 +74,8 @@ class ResolvedFollowMedia:
 
 #: 媒体代理允许的主机，投影自 follow_providers；不在表里的 provider 一律拒绝。
 _PROVIDER_HOSTS = follow_providers.hosts()
+#: 作品页主机，同样是投影。媒体白名单与页面主机是两份，判「能不能去取详情」用这一份。
+_PROVIDER_PAGE_HOSTS = follow_providers.page_hosts()
 #: 直链媒体放行任意公网主机的来源，同样投影自 follow_providers。
 _PUBLIC_MEDIA_PROVIDERS = follow_providers.public_media_hosts()
 #: rule34video 把每一档清晰度写成独立字段：`video_url` 是最低档，
@@ -100,6 +115,25 @@ def _allowed(provider: str, url: str) -> bool:
     return provider in _PUBLIC_MEDIA_PROVIDERS and public_https_url(url)
 
 
+def _page_allowed(provider: str, url: str) -> bool:
+    """这个来源的作品页能不能去取：媒体主机或页面主机任一命中即可。
+
+    rule34video 的详情页与正片在同一个域；Pornhub 的页面在 `pornhub.com`、媒体在
+    `phncdn.com`，只看媒体白名单会把每一条都判成取不到。
+    """
+    if _allowed(provider, url):
+        return True
+    try:
+        parsed = urllib.parse.urlsplit(str(url or ""))
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").casefold()
+    if parsed.scheme != "https" or not host:
+        return False
+    return any(host == suffix or host.endswith("." + suffix)
+               for suffix in _PROVIDER_PAGE_HOSTS.get(provider, ()))
+
+
 def proxyable(provider: str, media_url: str | None) -> bool:
     """一条直链媒体能不能经 `/follow-stream` 代理出去。
 
@@ -109,6 +143,29 @@ def proxyable(provider: str, media_url: str | None) -> bool:
     """
     url = archive_file_url(provider, str(media_url or ""))
     return bool(url) and _allowed(provider, url)
+
+
+#: 播放时才去详情页解析正片的来源。它们落库时没有可抄的直链：rule34video 的
+#: 签名地址会过期，Pornhub 干脆只有 HLS 清单。`playable` 因此不能只看 `media_url`，
+#: 否则这两类条目在界面上是「不可播」，点开却是能播的。
+PLAY_AT_RESOLVE = frozenset({"rule34video", "pornhub"})
+
+
+def resolvable_at_play(provider: str, page_url: str | None) -> bool:
+    """这一条能不能在按下播放时再去站点解析。判的是作品页地址本身可信。"""
+    return provider in PLAY_AT_RESOLVE and _page_allowed(provider, str(page_url or ""))
+
+
+def media_type(provider: str, media_url: str | None) -> str:
+    """播放器该用哪种源类型。HLS 来源给清单类型，其余按扩展名。"""
+    if provider == "pornhub":
+        return "application/vnd.apple.mpegurl"
+    path = urllib.parse.urlsplit(str(media_url or "")).path.casefold()
+    if path.endswith(".webm"):
+        return "video/webm"
+    if path.endswith(".mov"):
+        return "video/quicktime"
+    return "video/mp4"
 
 
 class FollowMediaResolver:
@@ -143,6 +200,8 @@ class FollowMediaResolver:
         self._misses: dict[int, float] = {}
         self._cooldowns: dict[str, float] = {}
         self._item_locks: dict[int, threading.Lock] = {}
+        #: HLS 子资源键 → (过期时刻, 条目 id, 清单根地址, 上游地址)。
+        self._resources: OrderedDict[str, tuple[float, int, str, str]] = OrderedDict()
         self._lock = threading.Lock()
 
     def cooling(self, provider: str) -> float:
@@ -219,7 +278,8 @@ class FollowMediaResolver:
                 self._misses.pop(next(iter(self._misses)))
             self._misses[item_id] = now + self.MISS_TTL
 
-    def _remember(self, item_id: int, resolved: ResolvedFollowMedia) -> None:
+    def _remember(self, item_id: int, resolved: ResolvedFollowMedia,
+                  ttl: float | None = None) -> None:
         """写入缓存并保持有界。调用方持有 `_lock`。"""
         now = self.clock()
         for key, (expiry, _) in list(self._cache.items()):
@@ -228,7 +288,33 @@ class FollowMediaResolver:
         self._cache.pop(item_id, None)
         while self._cache and len(self._cache) >= self.max_cache_entries:
             self._cache.pop(next(iter(self._cache)))
-        self._cache[item_id] = (now + self.ttl, resolved)
+        self._cache[item_id] = (now + (self.ttl if ttl is None else ttl), resolved)
+
+    # ---- HLS 子资源的短键 ------------------------------------------------
+    #
+    # 清单里的每一跳（子播放列表、分片、密钥）都换成一个不含上游地址的键，浏览器只
+    # 看得到 Peach 的 URL。映射只活在本机内存：上游的签名几分钟就过期，落盘只会留下
+    # 一批再也取不到的地址。容量按「几屏反复点开」定，超了先丢最早写进来的。
+
+    RESOURCE_TTL = 6 * 3600
+
+    def register_resource(self, item_id: int, root: str, url: str) -> str:
+        key = hashlib.sha256(f"{item_id}\n{root}\n{url}".encode()).hexdigest()
+        with self._lock:
+            self._resources.pop(key, None)
+            self._resources[key] = (self.clock() + self.RESOURCE_TTL, item_id, root, url)
+            while len(self._resources) > self.max_cache_entries * 64:
+                self._resources.popitem(last=False)
+        return key
+
+    def resource(self, item_id: int, key: str) -> str:
+        """按键取回上游地址。只核对条目归属：清单里的地址会随每次解析换签名，
+        拿当前根地址去比会把刚发出的那份清单判成失效。"""
+        with self._lock:
+            row = self._resources.get(key)
+        if row is None or row[0] <= self.clock() or row[1] != item_id:
+            raise FollowMediaUnavailable("播放资源已失效，请重新打开这一条")
+        return row[3]
 
     def with_credential_loader(
             self, loader: Callable[[str], Credential | None]) -> "FollowMediaResolver":
@@ -288,7 +374,7 @@ class FollowMediaResolver:
 
     def resolve(self, item: FollowItemRow, media_index: int | None = None,
                 height: int | None = None) -> ResolvedFollowMedia:
-        """解析可播地址。`height` 指定清晰度，只有 rule34video 有多档可选；
+        """解析可播地址。`height` 指定清晰度，只有 rule34video 与 Pornhub 有多档可选；
         要的那档不存在就退回默认（最高档），不报错——签名 URL 会过期，
         为一次选档失败中断播放不值得。"""
         media_items = item.metadata.get("media_items")
@@ -299,7 +385,7 @@ class FollowMediaResolver:
             return self._resolve_listed(item, media_items, media_index)
         if item.metadata.get("media_needs_credential"):
             raise FollowMediaUnavailable("媒体需要来源登录会话")
-        if item.provider != "rule34video":
+        if item.provider not in PLAY_AT_RESOLVE:
             # 归档站的存量行按旧规则拼过 URL（少 /data 前缀、主机也不对），
             # 在这里修回可取的形式；`_allowed` 按后缀匹配，file./n1. 这些子域
             # 仍在原站的白名单内，安全边界没有放宽。
@@ -315,15 +401,17 @@ class FollowMediaResolver:
             cached = self._cached(item.id)
         if cached:
             return _pick_quality(cached, height)
-        if not item.url or not _allowed(item.provider, item.url):
-            raise FollowMediaUnavailable("Rule34Video 详情地址不可用")
+        if not item.url or not _page_allowed(item.provider, item.url):
+            raise FollowMediaUnavailable("详情页地址不可用")
         with self._item_lock(item.id):
             # 排队期间前一个请求可能已经写好缓存或记下失败，先看一眼再决定回不回源。
             with self._lock:
                 cached = self._cached(item.id)
             if cached:
                 return _pick_quality(cached, height)
-            return _pick_quality(self._fetch_rule34video(item), height)
+            fetcher = (self._fetch_pornhub if item.provider == "pornhub"
+                       else self._fetch_rule34video)
+            return _pick_quality(fetcher(item), height)
 
     def _fetch_rule34video(self, item: FollowItemRow) -> ResolvedFollowMedia:
         """抓一次详情页，解析出各档正片地址并写进缓存；没取到记一次失败。"""
@@ -358,6 +446,103 @@ class FollowMediaResolver:
         with self._lock:
             self._remember(item.id, resolved)
         return resolved
+
+    #: HLS 清单的有效期比签名短得多：2026-10-23 实测 Pornhub 的 `validto` 只有一个
+    #: 小时上下，而清单里叠着好几层签名。缓存只留两分钟，过期后重新解析一次，
+    #: 免得把一批已经 410 的地址反复交给播放器。
+    PLAYLIST_TTL = 120.0
+
+    def _fetch_pornhub(self, item: FollowItemRow) -> ResolvedFollowMedia:
+        """抓一次作品页，从 `mediaDefinitions` 里取 HLS 各档并写进缓存。
+
+        这个站不给可播的渐进式 mp4：`format=mp4` 那条指向 `/video/get_media`，
+        匿名请求回空数组。所以这里只认 `format=hls`。
+        """
+        response = self.fetch(
+            item.provider,
+            HttpRequest("GET", item.url, {"User-Agent": USER_AGENT,
+                                           "Accept": "text/html"}),
+            self.timeout, self.max_bytes,
+        )
+        if response.status != 200 or len(response.body) > self.max_bytes:
+            LOGGER.warning("pornhub watch page for follow item %s unavailable: HTTP %s",
+                           item.id, response.status)
+            self._remember_miss(item.id)
+            raise FollowMediaUnavailable("Pornhub 作品页未取得")
+        found: list[tuple[int, str]] = []
+        for entry in pornhub_media_definitions(response.body.decode("utf-8", errors="replace")):
+            url = str(entry.get("videoUrl") or "")
+            if not url or not _allowed(item.provider, url):
+                continue
+            try:
+                height = int(entry.get("height") or 0)
+            except (TypeError, ValueError):
+                height = 0
+            if all(existing != url for _, existing in found):
+                found.append((height, url))
+        if not found:
+            LOGGER.warning("pornhub watch page for follow item %s has no hls url", item.id)
+            self._remember_miss(item.id)
+            raise FollowMediaUnavailable("Pornhub 正片地址未取得")
+        ordered = sorted(found, key=lambda row: row[0], reverse=True)
+        resolved = ResolvedFollowMedia(
+            ordered[0][1], item.url,
+            qualities=tuple(ordered),
+            allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
+            playlist=True)
+        with self._lock:
+            self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
+        return resolved
+
+
+def pornhub_media_definitions(text: str) -> tuple[dict, ...]:
+    """从作品页里取出 `mediaDefinitions` 那个数组。
+
+    站点把它内嵌在一段 JS 字符串里，引号是转义的（`\\"videoUrl\\":\\"…\\"`）。这里
+    先还原转义、再按括号配对截出数组本体交给 JSON 解析：正则会在这份几 MB 的页面
+    上被反斜杠和嵌套对象带偏，而这一段本来就是合法 JSON。
+    """
+    plain = text.replace('\\"', '"').replace("\\/", "/")
+    marker = plain.find('"mediaDefinitions"')
+    if marker < 0:
+        return ()
+    start = plain.find("[", marker)
+    if start < 0:
+        return ()
+    depth = 0
+    for index in range(start, min(len(plain), start + 200_000)):
+        if plain[index] == "[":
+            depth += 1
+        elif plain[index] == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(plain[start:index + 1])
+                except ValueError:
+                    return ()
+                return tuple(row for row in parsed
+                             if isinstance(row, dict) and row.get("format") == "hls")
+    return ()
+
+
+def rewrite_follow_playlist(body: bytes, base: str, *, item_id: int, root: str,
+                            provider: str,
+                            resolver: FollowMediaResolver) -> bytes:
+    """把上游清单里的每一跳换成 Peach 的分片键。
+
+    与 STRM 那条路径共用 `preview_cache.rewrite_hls`：清单模型、相对地址解析和
+    `EXT-X-MAP`／密钥／子清单的覆盖范围只该有一份实现。这里额外的两件事是：
+    每一跳都要过这个来源的主机白名单，键表挂在解析器上。
+    """
+    from .preview_cache import rewrite_hls
+
+    def link(target, _nested):
+        if not _allowed(provider, target):
+            raise FollowProxyError("播放列表包含不可访问的媒体地址")
+        key = resolver.register_resource(item_id, root, target)
+        return f"/follow-hls?id={item_id}&r={key}"
+
+    return rewrite_hls(body, base, link)
 
 
 def _allowed_resource(url: str, hosts: tuple[str, ...]) -> bool:

@@ -202,6 +202,9 @@ CREDENTIAL_GUIDE: dict[str, dict] = {
     "kemono": {"requirement": "none"},
     "coomer": {"requirement": "none"},
     "pawchive": {"requirement": "none"},
+    # 人物页与作品页都公开可读，没有要凭据的地方；登录态只会带进付费内容与地区限制，
+    # 那不是这条来源要解决的边界。
+    "pornhub": {"requirement": "none"},
     "rule34video": {"requirement": "none"},
     "rule34xxx": {
         "requirement": "required",

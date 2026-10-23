@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import (
     FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
 )
+from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from . import (
@@ -44,11 +45,14 @@ from .follow_covers import (
 from .follow_store import FollowStore
 from .follow_stream import (
     FollowMediaUnavailable, FollowProxyError, ResolvedFollowMedia, open_upstream,
+    rewrite_follow_playlist,
 )
 from .media import MediaUnavailable, normalized_path
 from .platform import within_root
 from .previews import ENTITY_THUMB_TYPE, PreviewUnavailable, entity_image_key
-from .remote_media_cache import AVATAR_REFRESH_SECONDS, FAVICON_REFRESH_SECONDS, cache_for
+from .remote_media_cache import (
+    AVATAR_REFRESH_SECONDS, FAVICON_REFRESH_SECONDS, MEDIA_HEADERS, cache_for,
+)
 from .preview_cache import PreviewCache
 from .routes_auth import require_auth
 from .segments import SegmentCancelled, SegmentUnavailable, build_hls_playlist
@@ -961,10 +965,12 @@ def follow_qualities(request: Request, id: int, args: dict[str, str] = Depends(r
     # 档位数量不写死：正则匹配 video_url 与任意编号的 video_alt_urlN，
     # 站点给几档就是几档（实测同一作者下有 4 档也有 5 档的条目）。
     # 2160 按站点自己的写法叫 4K，不叫 2160p。
+    # 清单本身的字节数不是片子的字节数：HLS 来源只报清晰度档位，不报大小，
+    # 播放器退回按秒的读数。
     return {"qualities": [
         {"height": height, "label": "4K" if height >= 2160 else f"{height}p"}
         for height, _ in resolved.qualities if height
-    ], "size": _follow_media_size(state, id, resolved)}
+    ], "size": None if resolved.playlist else _follow_media_size(state, id, resolved)}
 
 
 @router.api_route("/follow-stream", methods=["GET", "HEAD"])
@@ -985,6 +991,12 @@ def follow_stream(request: Request, id: int, media: int | None = None,
         if cached is not None:
             return cached
         target = state.follow_media_resolver.resolve(item, media, quality)
+        if target.playlist:
+            # 只有 HLS 的来源：浏览器要的是改写后的清单，不是一整段字节流；
+            # 清单按次取回，不进响应缓存。下载走不了这条路——清单本身不是片子。
+            if download:
+                return JSONResponse({"error": "这一条只有 HLS 清单，不能直接下载"}, status_code=400)
+            return _follow_playlist_response(state, request, item, target)
         # 跟重定向、逐跳过白名单、非 2xx 一律不转发，都在 follow_stream 里；
         # 这里只负责把 Peach 的请求接到那个流上。
         extra = {"content-disposition": _attachment_disposition(item.title, target.url)} if download else None
@@ -1001,6 +1013,98 @@ def follow_stream(request: Request, id: int, media: int | None = None,
     except (OSError, httpx.HTTPError):
         LOGGER.exception("follow media proxy failed for item %s", id)
         return JSONResponse({"error": "follow media unavailable"}, status_code=502)
+
+#: 清单本身很小；超过这个体积的不当清单处理。
+FOLLOW_PLAYLIST_LIMIT = 2 * 1024 * 1024
+
+
+def _follow_playlist_response(state, request: Request, item, target) -> Response:
+    """取回清单、把每一跳换成 `/follow-hls` 的短键，再把清单交给播放器。
+
+    上游地址（含签名查询串）只活在这个进程里：浏览器看到的每一跳都是
+    `/follow-hls?id=&r=`，`r` 是那一条的键。
+    """
+    upstream = open_upstream(state.http_transport.client, "GET", target,
+                             incoming=request.headers)
+    try:
+        body = bytearray()
+        for chunk in upstream.iter_bytes():
+            body.extend(chunk)
+            if len(body) > FOLLOW_PLAYLIST_LIMIT:
+                raise FollowProxyError("播放列表过大")
+        base = str(upstream.url)
+    finally:
+        upstream.close()
+    text = rewrite_follow_playlist(bytes(body), base, item_id=item.id, root=target.url,
+                                   provider=item.provider,
+                                   resolver=state.follow_media_resolver)
+    return Response(b"" if request.method == "HEAD" else text,
+                    media_type="application/vnd.apple.mpegurl",
+                    headers={"cache-control": "private, no-store",
+                             "referrer-policy": "no-referrer"})
+
+
+@router.api_route("/follow-hls", methods=["GET", "HEAD"])
+def follow_hls(request: Request, id: int, r: str = "",
+               args: dict[str, str] = Depends(require_auth)):
+    """关注条目 HLS 清单里的一跳：子清单、分片或密钥。
+
+    键只在本机内存里对回上游地址，所以前端拿不到上游 URL；每一条的分片因而也不进
+    响应缓存——签名几分钟就换一次，缓存只会攒下一批取不到的字节。
+    """
+    state = request.app.state
+    if not r:
+        return Response(status_code=404)
+    with state.database.read_connection() as connection:
+        item = FollowStore(lambda: connection).item(id)
+    if item is None:
+        return Response(status_code=404)
+    try:
+        url = state.follow_media_resolver.resource(item.id, r)
+    except (FollowMediaUnavailable, ValueError):
+        return Response(status_code=404, headers={"cache-control": "no-store"})
+    target = ResolvedFollowMedia(url, item.url, playlist=True,
+                                 allowed_hosts=follow_providers.hosts().get(item.provider, ()))
+    try:
+        upstream = open_upstream(state.http_transport.client, request.method, target,
+                                 incoming=request.headers)
+    except FollowProxyError:
+        return Response(status_code=502, headers={"cache-control": "no-store"})
+    content_type = upstream.headers.get("content-type", "").split(";")[0].lower()
+    is_playlist = (content_type in {"application/vnd.apple.mpegurl", "application/x-mpegurl",
+                                    "audio/mpegurl"}
+                   or urlsplit(str(upstream.url)).path.lower().endswith(".m3u8"))
+    if not is_playlist:
+        headers = {name: upstream.headers[name] for name in MEDIA_HEADERS if name in upstream.headers}
+        headers.update({"cache-control": "private, no-store", "referrer-policy": "no-referrer"})
+        if request.method == "HEAD":
+            upstream.close()
+            return Response(status_code=upstream.status_code, headers=headers)
+
+        def body():
+            try:
+                yield from upstream.iter_raw()
+            finally:
+                upstream.close()
+
+        return StreamingResponse(body(), status_code=upstream.status_code, headers=headers)
+    try:
+        payload = bytearray()
+        for chunk in upstream.iter_bytes():
+            payload.extend(chunk)
+            if len(payload) > FOLLOW_PLAYLIST_LIMIT:
+                raise FollowProxyError("播放列表过大")
+        base = str(upstream.url)
+    finally:
+        upstream.close()
+    text = rewrite_follow_playlist(bytes(payload), base, item_id=item.id, root=url,
+                                   provider=item.provider,
+                                   resolver=state.follow_media_resolver)
+    return Response(b"" if request.method == "HEAD" else text,
+                    media_type="application/vnd.apple.mpegurl",
+                    headers={"cache-control": "private, no-store",
+                             "referrer-policy": "no-referrer"})
+
 
 @router.api_route("/follow-image", methods=["GET", "HEAD"])
 def follow_image(request: Request, id: int, media: int | None = None,

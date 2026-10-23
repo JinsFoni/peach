@@ -21,7 +21,8 @@ export function directStreamSource(item: PlayerItem, session: string): PlayerSou
    保存时写了 `follow_item.asset_id`，`/api/item` 反查后回传 `follow_item_id`。 */
 function followStreamSource(item: PlayerItem): PlayerSource | null {
   return item.location === 'online' && item.follow_item_id
-    ? { src: `/follow-stream?id=${item.follow_item_id}`, type: 'video/mp4' } : null;
+    ? { src: `/follow-stream?id=${item.follow_item_id}`,
+        type: item.follow_media_type || 'video/mp4' } : null;
 }
 
 /** 起播片源只有这一个判据，详情和沉浸模式共用：服务端说要转码分片就给分片，否则直读。

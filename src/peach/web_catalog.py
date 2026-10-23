@@ -578,6 +578,7 @@ def attach_creator_reference_details(contract: WebContract, refs):
 def attach_saved_follow_cards(contract: WebContract, rows):
     """已保存在线卡片使用关注来源的封面与内容标签。"""
     from .follow_store import FollowStore
+    from .follow_stream import media_type
     from .web_follow import _item_tags, _thumb_url
 
     ids = [row["id"] for row in rows if row.get("location") == "online"]
@@ -599,6 +600,8 @@ def attach_saved_follow_cards(contract: WebContract, rows):
         row["follow_item_id"] = item.id
         row["follow_thumb_url"] = _thumb_url(item)
         row["follow_tags"] = _item_tags(item)
+        # 片源类型跟着条目走：只有 HLS 的来源给清单类型，其余按 mp4。
+        row["follow_media_type"] = media_type(item.provider, item.media_url)
 
 
 #: 版次的展示次序：正片在前，处理过的在后。这不是偏好排序，只是要一个稳定的
@@ -916,9 +919,14 @@ def q_item(contract: WebContract, aid):
         # 反查一次就能让馆藏详情自己播，不必先跳回关注页。
         if d.get("location") == "online":
             row = c.execute(
-                "SELECT id FROM follow_item WHERE asset_id=? ORDER BY id LIMIT 1", (aid,),
+                "SELECT i.id,s.provider,i.media_url FROM follow_item i"
+                " JOIN follow_source s ON s.id=i.source_id"
+                " WHERE i.asset_id=? ORDER BY i.id LIMIT 1", (aid,),
             ).fetchone()
             d["follow_item_id"] = int(row[0]) if row else None
+            if row is not None:
+                from .follow_stream import media_type
+                d["follow_media_type"] = media_type(str(row[1] or ""), row[2])
         legacy_rows = list(c.execute(
             "SELECT t.tag,t.source FROM asset_tag t WHERE t.asset_id=? AND "
             + tag_not_hidden("t.asset_id", "peach_normalize(t.tag)")

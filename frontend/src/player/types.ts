@@ -64,6 +64,8 @@ export interface PlayerItem {
   height?: number | null;
   size?: number | null;
   follow_item_id?: number | null;
+  /* 关注条目的片源类型（HLS 来源给清单类型）；缺省按 mp4。 */
+  follow_media_type?: string | null;
   media_type?: string;
   thumb_url?: string;
   [field: string]: unknown;
