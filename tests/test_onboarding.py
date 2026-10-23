@@ -647,7 +647,8 @@ class SetupJsonContractTests(_SetupHttpCase):
             self.assertEqual(len(by_key["media_dir"]["help"]), 1)
         else:
             self.assertIsNone(data["media_root"])
-            self.assertIn("本机文件夹是这台电脑读取媒体的位置", by_key["media_dir"]["help"][-1])
+            self.assertIn("填写这台设备实际读取媒体的文件夹",
+                          by_key["media_dir"]["help"][-1])
         self.assertEqual(data["cloud"]["link"]["url"], "https://www.clouddrive2.com/help.html")
         # 默认对局域网开放，所以访问密码开关第一次出现就开着；扫描默认勾上，导入历史默认不勾。
         self.assertEqual((data["access_enabled"], data["scan_now"], data["history_guide"]), (True, True, False))
