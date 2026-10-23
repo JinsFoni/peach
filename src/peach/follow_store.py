@@ -178,13 +178,17 @@ def _carry_image_dims(metadata: dict, previous_json: str | None) -> dict:
 #: published_at、group_hint 一概不动，metadata 用 `json_patch` 并进去而
 #: 不是整块替换——否则跳过第二阶段就等于把上一轮取到的细节抹掉，而抹掉之后
 #: 「详情本来就没有」和「这次没去问」在数据里长得一模一样。
-#: 时长只补空：rule34xxx 的时长读自原文件头，帖子页被限流挡回来时它照样取得到，
-#: 这时候选仍是 partial，已有的时长不覆盖，空着的补上。
+#: 时长与发布时间只补空：rule34xxx 的时长读自原文件头，帖子页被限流挡回来时它照样
+#: 取得到；pornhub 的发布时间可以从列表的 vkey 反推。这时候选仍是 partial，
+#: 已有的精确值不覆盖，空着的补上。
 _PARTIAL_UPDATE = (
     "  title=excluded.title, url=excluded.url, version=excluded.version,"
     "  release_key=excluded.release_key, variant_kind=excluded.variant_kind,"
     "  variant_label=excluded.variant_label,"
     "  duration=COALESCE(follow_item.duration, excluded.duration),"
+    "  published_at=COALESCE(follow_item.published_at, excluded.published_at),"
+    "  published_precision=CASE WHEN follow_item.published_at IS NOT NULL"
+    "    THEN follow_item.published_precision ELSE excluded.published_precision END,"
     "  metadata_json=json_patch(follow_item.metadata_json, excluded.metadata_json),"
     "  last_seen_at=excluded.last_seen_at"
 )

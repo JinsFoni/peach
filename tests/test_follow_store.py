@@ -1349,6 +1349,29 @@ class EnrichedMarkTests(_StoreCase):
         self.assertEqual(self.store.enriched_external_ids(source_id, "tag_types_duration"),
                          frozenset({"timed", "still"}))
 
+    def test_a_partial_candidate_fills_an_empty_release_time_without_overwriting(self):
+        """列表能给出发布时间（pornhub 从 vkey 反推）：空着的补上，已有精确值不动。"""
+        source_id = self._source(provider="pornhub", ref="mini-diva")
+        self.store.record(source_id, _fetch([
+            FollowCandidate(provider="pornhub", external_id="empty", title="a"),
+            FollowCandidate(provider="pornhub", external_id="known", title="b",
+                            published_at="2026-09-23T09:51:16Z",
+                            extra={"published_precision": "exact"}),
+        ], provider="pornhub", ref="mini-diva"), moment=MOMENT)
+        self.store.record(source_id, _fetch([
+            FollowCandidate(provider="pornhub", external_id="empty", title="a",
+                            partial=True, published_at="2026-09-23T09:38:57Z",
+                            extra={"published_precision": "approximate"}),
+            FollowCandidate(provider="pornhub", external_id="known", title="b",
+                            partial=True, published_at="2026-09-23T10:02:00Z",
+                            extra={"published_precision": "approximate"}),
+        ], provider="pornhub", ref="mini-diva"), moment=MOMENT)
+        times = {row[0]: (row[1], row[2]) for row in self.connection.execute(
+            "SELECT external_id, published_at, published_precision FROM follow_item"
+            " WHERE source_id=?", (source_id,))}
+        self.assertEqual(times, {"empty": ("2026-09-23T09:38:57Z", "approximate"),
+                                 "known": ("2026-09-23T09:51:16Z", "exact")})
+
     def test_a_partial_candidate_fills_an_empty_duration_without_overwriting(self):
         """帖子页被挡回来时候选仍是 partial，文件头读到的时长只补空着的那一格。"""
         source_id = self._source(provider="rule34xxx", ref="tag")
