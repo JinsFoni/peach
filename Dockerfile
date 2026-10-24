@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 FROM ghcr.io/astral-sh/uv:0.13.1 AS uv
-FROM python:3.14.8-slim-trixie AS build
+FROM python:3.15.0-slim-trixie AS build
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 ENV UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
@@ -13,7 +13,7 @@ COPY web ./web
 COPY resources ./resources
 RUN uv sync --locked --no-dev --no-editable
 
-FROM python:3.14.8-slim-trixie
+FROM python:3.15.0-slim-trixie
 LABEL org.opencontainers.image.title="Peach" \
       org.opencontainers.image.source="https://github.com/peach-mitao/peach" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
