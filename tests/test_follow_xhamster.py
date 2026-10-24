@@ -254,14 +254,17 @@ class MediaTests(unittest.TestCase):
         )
 
     def _resolver(self, page: str = WATCH,
-                  masters: dict[str, tuple[int, bytes]] | None = None):
+                  masters: dict[str, tuple[int, bytes]] | None = None,
+                  pages: list[str] | None = None):
         answers = masters or {}
+        queue = list(pages or [page])
 
         def transport(request, timeout, max_bytes):
             for needle, (status, body) in answers.items():
                 if needle in request.url:
                     return HttpResponse(status, {}, body)
-            return HttpResponse(200, {}, page.encode("utf-8"))
+            body = queue.pop(0) if len(queue) > 1 else queue[0]
+            return HttpResponse(200, {}, body.encode("utf-8"))
         return FollowMediaResolver(transport)
 
     def test_playing_resolves_the_playlist_at_the_highest_quality(self):
@@ -284,6 +287,13 @@ class MediaTests(unittest.TestCase):
         resolved = resolver.resolve(self._item())
         self.assertEqual(resolved.url, f"{FRONT}/2160p.av1.mp4.m3u8")
         self.assertEqual(resolver.cooling("xhamster"), 0)
+
+    def test_an_interception_page_is_fetched_again(self):
+        """这条出口上偶尔回的是地域拦截页：状态 200、几百字节、页面里没有播放器。"""
+        blocked = "<html><body>법적 사유로 이용 불가</body></html>"
+        resolver = self._resolver(pages=[blocked, WATCH],
+                                  masters={"_TPL_.h264.mp4.m3u8": (200, _master())})
+        self.assertEqual(resolver.resolve(self._item()).url, f"{FRONT}/2160p.h264.mp4.m3u8")
 
     def test_a_page_without_a_playlist_reports_unavailable(self):
         """渐进式 mp4 只到 720p；没有母清单就不拿它充数，宁可说取不到。"""
