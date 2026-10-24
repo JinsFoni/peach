@@ -48,10 +48,17 @@ export interface HeroAboutItem {
   glyph?: string;
 }
 
+/** 站上登记的她自己那个账号：名字照页上写，`glyph` 是雪碧图里那一枚牌子。 */
+export interface HeroSideLink {
+  label: string;
+  url: string;
+  glyph?: string;
+}
+
 /** 女优页头右侧的资料表（ADR-0069）。服务端只下发有值的项。
  *
  *  `bio` 与 `about` 是发布账号在站上的那一页：这些读数进资料卡，排在名字与身材下面
- *  （ADR-0115、ADR-0116）。 */
+ *  （ADR-0115、ADR-0116）；`rank` 与 `links` 排在同一张卡的最右一栏。 */
 export interface HeroProfile {
   birth_date?: string;
   age?: number;
@@ -66,6 +73,8 @@ export interface HeroProfile {
   tags?: string[];
   bio?: string;
   about?: HeroAboutItem[];
+  rank?: HeroAboutItem;
+  links?: HeroSideLink[];
 }
 
 export interface HeroNameGroups {
@@ -308,6 +317,25 @@ export function aboutPanel(p: HeroProfile | null | undefined): { bio: string; it
     return label && value ? [{ ...item, label, value }] : [];
   });
   return { bio, items };
+}
+
+/** 资料卡最右那一栏：站上的模特排名与她登记的账号（ADR-0116）。
+ *
+ *  排名缺值、链接不是 https 直链时那一条不画——点不开的东西排在卡里只是占地方。 */
+export function sideRail(p: HeroProfile | null | undefined): { rank: HeroAboutItem | null; links: HeroSideLink[] } {
+  const given = p?.rank;
+  const value = (given?.value || '').trim();
+  const rank: HeroAboutItem | null = given && value
+    ? { label: (given.label || '').trim(), value, glyph: given.glyph }
+    : null;
+  const seen = new Set<string>();
+  const links = (p?.links || []).flatMap((link) => {
+    const url = (link?.url || '').trim();
+    if (!/^https:\/\//i.test(url) || seen.has(url)) return [];
+    seen.add(url);
+    return [{ ...link, url, label: (link.label || '').trim() || url.replace(/^https:\/\//i, '') }];
+  });
+  return { rank, links };
 }
 
 /** 公司页名字下面那一行先列几个别名，余下的收进「+N」。 */
