@@ -84,11 +84,11 @@ class Case(unittest.TestCase):
         self.connection = sqlite3.connect(self.db)
         self.addCleanup(self.connection.close)
 
-    def entity(self, name: str, *aliases) -> int:
+    def entity(self, name: str, *aliases, kind: str = "performer") -> int:
         with self.connection:
             cursor = self.connection.execute(
                 "INSERT INTO entity(kind,canonical_name,normalized_name,created_at,updated_at)"
-                " VALUES('performer',?,?,?,?)", (name, normalize_entity_name(name), STAMP, STAMP))
+                " VALUES(?,?,?,?,?)", (kind, name, normalize_entity_name(name), STAMP, STAMP))
             entity_id = int(cursor.lastrowid)
             for written, source in aliases:
                 self.connection.execute(
@@ -172,6 +172,60 @@ class HeaderTests(Case):
         self.assertEqual(head["profile"], {})
         self.assertEqual(head["name_groups"]["shown"], ["篠田ゆう"])
         self.assertEqual(performer_header.profiled(self.connection), set())
+
+
+class AccountProfileTests(Case):
+    """发布账号在站上那一页（ADR-0115）：资料卡仍旧只有五项，简介与资料表另起一栏。
+
+    资料行由 `pornhub_profiles.record` 规整，这里直接写它交回的那一份。
+    """
+
+    def land_account(self, entity_id: int, about, bio: str = "", name: str = "Mini Diva") -> None:
+        with self.connection:
+            write_profile(self.connection, entity_id, {
+                "tags": [], "height_cm": 167, "bust_cm": 89, "waist_cm": 64, "hip_cm": 91,
+                "birthplace": "Czech Republic", "hobbies": "Boring AF.",
+                "raw": {"名前": name, "简介": bio, "资料": list(about)}},
+                source="auto:creator-profile@3", source_url="https://example.invalid/about",
+                fetched_at=STAMP)
+
+    def test_the_site_profile_sits_beside_the_five_rows(self):
+        mini = self.entity("mini diva", kind="creator")
+        self.land_account(mini, [
+            {"label": "感情", "value": "单身", "glyph": "heart"},
+            {"label": "出生地", "value": "Czech Republic", "glyph": "globe"}],
+            bio="Love being here from time to time.")
+        profile = self.header(mini, "mini diva")["profile"]
+        self.assertEqual(profile["about"], [
+            {"label": "感情", "value": "单身", "glyph": "heart"},
+            {"label": "出生地", "value": "Czech Republic", "glyph": "globe"}])
+        self.assertEqual(profile["bio"], "Love being here from time to time.")
+        # 卡里那五项还是五项：身高与三围在「身材」那一格里，资料表不重复列。
+        self.assertEqual((profile["height"], profile["bust"], profile["waist"], profile["hip"]),
+                         (167, 89, 64, 91))
+
+    def test_a_row_without_a_label_or_a_value_is_not_drawn(self):
+        mini = self.entity("mini diva", kind="creator")
+        self.land_account(mini, [
+            {"label": "", "value": "单身"}, {"label": "兴趣", "value": "  "},
+            {"label": "取向", "value": "男女通吃"}, {"value": "没有标签"}])
+        profile = self.header(mini, "mini diva")["profile"]
+        self.assertEqual(profile["about"], [
+            {"label": "取向", "value": "男女通吃", "glyph": "info"}])
+
+    def test_a_long_bio_is_cut_where_the_card_stops_reading(self):
+        mini = self.entity("mini diva", kind="creator")
+        self.land_account(mini, [], bio="好" * (performer_header.BIO_LIMIT + 40))
+        bio = self.header(mini, "mini diva")["profile"]["bio"]
+        self.assertEqual(len(bio), performer_header.BIO_LIMIT + 1)
+        self.assertTrue(bio.endswith("…"))
+
+    def test_an_account_without_a_site_profile_keeps_the_plain_header(self):
+        mini = self.entity("mini diva", kind="creator")
+        self.land_account(mini, [], bio="")
+        profile = self.header(mini, "mini diva")["profile"]
+        self.assertNotIn("about", profile)
+        self.assertNotIn("bio", profile)
 
 
 class ApiTests(Case):

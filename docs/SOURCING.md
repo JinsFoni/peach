@@ -771,6 +771,26 @@ Instagram 的独立用户登录会话未取得，自动适配器不进正式依�
     名字链上才收，对上账本多个人时记「需人工消歧」。
   - 它能给日文原名加旧艺名的罗马字。厂牌名不能用它，它自己就把 `セレブの友` 写成 `Celeb no Tomo`。
 
+### 发布账号在人物页上的头像与资料
+
+追更来源绑出来的创作者（ADR-0096）没有本地作品可以截脸，头像与资料取自她的人物页
+（ADR-0115，`pornhub_profiles`）：
+
+- 取的是**来源自己指向的那一页**，只把主机换成中文站。首页、作品页、「简介」页签三处给的
+  节点是同一批，所以不必另猜页签；页型（`/model/`、`/pornstar/`、`/users/`）由路径里那一段
+  决定，重定向跟到底。
+- 能读到：头像（`#getAvatar`）、名字（`h1[itemprop="name"]`）、简介
+  （`section.aboutMeSection`）、资料表（`div.js-infoText div.infoPiece`，十几个「标签: 值」）、
+  本人账号（`div.socialsColumn ul.socialList`）与读数（`div.infoBoxes [data-title]`）。
+- **头像地址带签名，只有页面给的那一条能取。** 换尺寸、去掉签名段都回 401，地址也不能存进
+  账本当长期可用的源；取页之后紧接着取图。这一档只有 200×200，装图因此不受「长边 ≥ 500」的
+  自动补头像门槛约束。
+- 资料表的标签是中文（`感情状态:`、`出身地:`），值仍是站上原文（`Czech Republic`、`White`）；
+  是否题两个站写「是／否」与 `Yes`／`No`，翻译与图标名在 `pornhub_profiles.ABOUT_FIELDS`。
+  身高、三围是英制，账本按厘米存。站上表里还没收录的项照原文列。
+- 这些是作者自己填的读数，不是核实过的身份断言；身份类结论仍走断言与复核。证据见
+  [取证记录](reference-snapshots/pornhub-model-profile.md)。
+
 ## 目录型来源与社媒链接
 
 补女优社媒走「目录型来源整站抓一遍、离线比名、复核 CSV 装入」，不逐人搜索（`scripts/harvest_directory_links.py`）。

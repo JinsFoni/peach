@@ -109,7 +109,7 @@ class ReferenceUpdateTests(unittest.TestCase):
              "readme-javinfo-legacy",
              "evilcharts-registry",
              "youtube-stats-buffer-20260829",
-             "follow-pornhub-hls"},
+             "follow-pornhub-hls", "pornhub-model-profile"},
         )
         self.assertNotEqual(
             sources["vercel-report-design"]["url"],

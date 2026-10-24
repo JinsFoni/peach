@@ -20,7 +20,8 @@ import urllib.parse
 
 from pathlib import Path
 
-from . import avatar_face, follow_assets, follow_creators, follow_providers, wants
+from . import (avatar_face, creator_profile_followup, follow_assets, follow_creators,
+               follow_providers, wants)
 from .follow import FollowSourceError
 from .follow_faces import annotate_group
 from .follow_check import plan_check, run_check
@@ -2227,11 +2228,13 @@ def _run_follow_check(contract, body, job_id=None) -> dict:
         if row['id'] in completed:
             continue
         session.check(row)
-    # 还没建档的关注作者交给建档后继（ADR-0096）。后继由结果声明、调度端统一派
-    # （ADR-0040）；这里判不出来只是这一轮不派，检查本身的结论不受影响。
+    # 还没建档的关注作者交给建档后继（ADR-0096），绑着来源的创作者缺头像与资料交给补资料
+    # 后继（ADR-0115）。后继由结果声明、调度端统一派（ADR-0040）；这里判不出来只是这一轮
+    # 不派，检查本身的结论不受影响。
     try:
         with contract.database.read_connection() as connection:
             followups = follow_creators.declare(connection)
+        followups += creator_profile_followup.declare(contract)
     except sqlite3.Error:
         followups = []
     return {"ok": True, "checked": len(session.results), "results": session.results, "followups": followups}

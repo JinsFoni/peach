@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntityHeroPage } from '../../src/react/entity-hero/entity-hero-page';
 import {
-  factRows, heroLinks, nameChoices, nameLine, shownTags,
+  aboutPanel, factRows, heroLinks, nameChoices, nameLine, shownTags,
   type EntityHeroActions, type EntityHeroData, type EntityHeroHelpers, type EntityHeroProps,
 } from '../../src/react/entity-hero/entity-hero';
 import { queryClient } from '../../src/react/query';
@@ -108,6 +108,17 @@ describe('排版用的纯函数', () => {
     expect(nameLine(null)).toBeNull();
   });
 
+  it('站上资料表空的那几格不画：缺标签、缺值都不算一项', () => {
+    const about = aboutPanel({
+      bio: '  Love being here from time to time.  ',
+      about: [{ label: '感情', value: '单身', glyph: 'heart' }, { label: '', value: '别的' },
+        { label: '兴趣', value: '   ' }, { label: '取向', value: '男女通吃' }],
+    });
+    expect(about.bio).toBe('Love being here from time to time.');
+    expect(about.items.map((item) => item.label)).toEqual(['感情', '取向']);
+    expect(aboutPanel(null)).toEqual({ bio: '', items: [] });
+  });
+
   it('标签只列前四个；只多出一个时直接列出来', () => {
     expect(shownTags(['a', 'b', 'c', 'd', 'e'])).toEqual({ shown: ['a', 'b', 'c', 'd', 'e'], rest: 0 });
     expect(shownTags(['a', 'b', 'c', 'd', 'e', 'f'])).toEqual({ shown: ['a', 'b', 'c', 'd'], rest: 2 });
@@ -197,6 +208,35 @@ describe('画出什么', () => {
     expect(agency.querySelector('[data-entity-foot]')).toBeNull();
     const performerLine = (await open(props())).querySelector('[data-entity-alias]')?.textContent ?? '';
     expect(performerLine).not.toContain('事务所');
+  });
+
+  it('发布账号在站上的简介与资料表排在资料卡下面，卡里仍旧只有那五项', async () => {
+    const host = await open(props({ kind: 'creator', name: 'mini diva', entity: {
+      id: 1, canonical_name: 'mini diva', asset_count: 0,
+      profile: {
+        height: 167, bust: 89, waist: 64, hip: 91,
+        about: [{ label: '感情', value: '单身', glyph: 'heart' },
+          { label: '出生地', value: 'Czech Republic', glyph: 'globe' }],
+        bio: 'Love being here from time to time.',
+      },
+    } }));
+    const panel = host.querySelector('[data-entity-about]')!;
+    const rows = [...panel.querySelectorAll('dl > div')].map((row) => [
+      row.querySelector('dt')?.textContent, row.querySelector('dd')?.textContent]);
+    expect(rows).toEqual([['感情', '单身'], ['出生地', 'Czech Republic']]);
+    // 每一项那枚字形与标签同一行，图标名由服务端定。
+    expect(panel.querySelector('dt use')?.getAttribute('href')).toBe('#i-heart');
+    expect(panel.querySelector('[data-about-bio]')?.textContent).toBe(
+      '简介Love being here from time to time.');
+    // 身高与三围在卡里「身材」那一格，不在资料表里再来一遍。
+    const card = host.querySelector('[data-entity-facts]')!.textContent ?? '';
+    expect(card).toContain('T167 · B89 · W64 · H91');
+    expect(panel.textContent).not.toContain('167');
+  });
+
+  it('没有站上资料的账号不画那一栏，页面上也没有空的一块', async () => {
+    const host = await open(props());
+    expect(host.querySelector('[data-entity-about]')).toBeNull();
   });
 
   it('公司别名先列三个，余下的收进「+N」，浮层里一个名字一行', async () => {

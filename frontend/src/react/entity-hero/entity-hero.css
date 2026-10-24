@@ -299,6 +299,51 @@
 .peach-react [data-entity-facts] :is([data-fact-tone="num"], dd[data-fact="num"]) { font-variant-numeric: tabular-nums; }
 .peach-react [data-entity-facts] [data-fact-tone="sub"] { color: var(--muted); }
 .peach-react [data-entity-facts] dd[data-fact="clip"] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ── 站上资料（ADR-0115）──
+ * 发布账号的身份在站上：一段简介加一张资料表（感情、取向、出身地、体重、纹身……）。这些读数
+ * 够写十几行，放进卡里那一栏会把卡撑得比这一页的主角还高，所以排在卡下面按列铺开：宽度够了
+ * 自动并成两列以上，一行一个「图标 标签 值」。 */
+.peach-react [data-entity-about] {
+  margin: 0 0 22px;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  line-height: 22px;
+}
+.peach-react [data-entity-about] dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px 28px;
+  margin: 0;
+}
+.peach-react [data-entity-about] dl > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.peach-react [data-entity-about] dt {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.peach-react [data-entity-about] dt svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.peach-react [data-entity-about] dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.peach-react [data-entity-about] [data-about-bio] { margin: 12px 0 0; overflow-wrap: anywhere; }
+.peach-react [data-entity-about] [data-about-bio] b { margin-right: 8px; color: var(--muted); font-weight: inherit; }
+
 /* 站上的标签只是读数，不是这一页的筛选（那排在下面的筛选条里），所以是标签的脸、不接点击。 */
 .peach-react :is(dd[data-fact="tags"], [data-fact-tags]) { display: flex; flex-wrap: wrap; gap: 6px; }
 /* 一枚标签至多一行宽，超长的截成省略号，全文在 title 里。 */
