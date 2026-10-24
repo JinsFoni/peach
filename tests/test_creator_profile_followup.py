@@ -85,7 +85,7 @@ class Case(unittest.TestCase):
 
     # ── 造数据 ──
     def creator(self, name: str = "mini diva", provider: str = "pornhub",
-                url: str = SOURCE_URL) -> int:
+                url: str = SOURCE_URL, ref: str = "mini-diva") -> int:
         column = normalize_entity_name(name)
         with self.database.write_transaction(notify=False) as connection:
             cursor = connection.execute(
@@ -96,7 +96,7 @@ class Case(unittest.TestCase):
                 connection.execute(
                     "INSERT INTO follow_source(entity_id,provider,ref,label,url,created_at,updated_at)"
                     " VALUES(?,?,?,?,?,?,?)",
-                    (entity_id, provider, "mini-diva", name, url, STAMP, STAMP))
+                    (entity_id, provider, ref, name, url, STAMP, STAMP))
         return entity_id
 
     def run_once(self, entity_id: int) -> dict:
@@ -141,6 +141,18 @@ class PlanTests(Case):
         """别家的连接器只有作品列表：派出去就是一条注定取不到的失败。"""
         self.creator(provider="kemono")
         self.assertEqual(self.declared(), [])
+
+    def test_a_new_creator_is_declared_for_just_that_one(self):
+        """建档那一轮只认它刚建出来的那几位，别人的档案不该跟着重跑一遍。"""
+        asked = self.creator()
+        self.creator("someone else", ref="someone-else")
+        self.assertEqual([row["key"] for row in followup.declared_for(self.contract, [asked])],
+                         [f"creator-profile:{asked}"])
+        self.assertEqual(followup.declared_for(self.contract, []), [])
+
+    def test_a_named_creator_without_a_profile_source_is_left_out(self):
+        asked = self.creator(provider="kemono")
+        self.assertEqual(followup.declared_for(self.contract, [asked]), [])
 
     def test_a_profile_that_was_just_written_is_not_asked_for_again(self):
         entity_id = self.creator()

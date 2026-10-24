@@ -17,6 +17,8 @@
    Patreon 用户 id 拼 `user?u=`，OnlyFans 用户名）；名片里可信的那几条
    （`follow_identity.trusted_profile_links`）。归档站与聚合站本身不登记，`follow_source`
    的绑定就是它们的记录。
+5. **补资料**：这一轮新建出来的创作者当场派一条补资料后继（ADR-0115）：关注检查结算时
+   这批实体还不存在，那边的声明要到下一轮检查才看得见它们。
 
 链接只在绑定那一刻写：之后人删掉的一条不会在下一轮又长回来。每条写入都带归属串
 `auto:follow-creator` 与这一轮的批次号，`scripts/revert_auto_landing.py` 按它们整批撤回：
@@ -31,11 +33,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from . import creator_profile_followup
 from .entities import canonicalize_entity_name, normalize_entity_name
 from .follow_identity import author_display_name, author_name, name_key, trusted_profile_links
 from .follow_sources import KemonoConnector
 from .follow_store import FollowStore
 from .followups import FollowupType, register
+from .task_runs import declared_rows
 
 TASK_KEY = "follow-creator"
 TASK_LABEL = "关注作者建档"
@@ -223,9 +227,13 @@ def plan(connection: sqlite3.Connection) -> list[Landing]:
 
 def apply(connection: sqlite3.Connection, landings: list[Landing], *, batch: str,
           source: str = SOURCE, now: str | None = None) -> dict:
-    """把 `create` 与 `join` 两类写进账本。调用方给写事务；重跑不会多出行。"""
+    """把 `create` 与 `join` 两类写进账本。调用方给写事务；重跑不会多出行。
+
+    `created_ids` 是这一轮新建的实体，调用方据此给它们派补资料后继（ADR-0115）。
+    """
     stamp = now or datetime.now(timezone.utc).isoformat()
     created = bound = linked = aliased = 0
+    created_ids: list[int] = []
     for landing in landings:
         if landing.action not in ("create", "join"):
             continue
@@ -241,6 +249,7 @@ def apply(connection: sqlite3.Connection, landings: list[Landing], *, batch: str
                  json.dumps({"source": source, "batch": batch, "author_key": landing.key},
                             ensure_ascii=False), stamp, stamp)).lastrowid)
             created += 1
+            created_ids.append(entity_id)
         bound += connection.execute(
             f"UPDATE follow_source SET entity_id=?,updated_at=? WHERE entity_id IS NULL"
             f" AND id IN ({','.join('?' * len(landing.source_ids))})",
@@ -259,7 +268,8 @@ def apply(connection: sqlite3.Connection, landings: list[Landing], *, batch: str
                 "INSERT OR IGNORE INTO entity_alias(entity_id,alias,normalized_alias,source,"
                 "confidence) VALUES(?,?,?,?,1.0)",
                 (entity_id, alias, normalize_entity_name(alias), batch)).rowcount
-    return {"created": created, "bound": bound, "links": linked, "aliases": aliased}
+    return {"created": created, "bound": bound, "links": linked, "aliases": aliased,
+            "created_ids": created_ids}
 
 
 #: 人在资料页上点「是同一个人」写下的归属。人的判断不进自动撤回。
@@ -282,8 +292,11 @@ def confirm(connection: sqlite3.Connection, entity_id: int, key: str) -> dict:
         raise ValueError("这组关注作者已经不在等确认了，刷新后再看")
     landing.action = "join"
     stamp = datetime.now(timezone.utc).isoformat()
-    return apply(connection, [landing], batch=f"{CONFIRM_SOURCE}@{stamp}",
-                 source=CONFIRM_SOURCE, now=stamp)
+    written = apply(connection, [landing], batch=f"{CONFIRM_SOURCE}@{stamp}",
+                    source=CONFIRM_SOURCE, now=stamp)
+    # 并入的是已有的那条实体，这一路不新建，补资料后继由下一轮关注检查按指纹派。
+    written.pop("created_ids")
+    return written
 
 
 def summarize(landings: list[Landing]) -> dict:
@@ -314,9 +327,27 @@ def run(contract, key: str, handle) -> dict:
     with contract.database.write_transaction() as connection:
         landings = plan(connection)
         written = apply(connection, landings, batch=batch)
+    created = written.pop("created_ids")
     if written["created"] or written["bound"]:
         contract.cache_bust()
-    return {**summarize(landings), **written, "batch": batch}
+    return {**summarize(landings), **written, "batch": batch,
+            **_declare_profiles(contract, created, handle)}
+
+
+def _declare_profiles(contract, entity_ids: list[int], handle) -> dict:
+    """刚建出来的创作者当场派一条补资料后继（ADR-0115）。
+
+    关注检查结算时这一批实体还不存在——建档是一条后继——那边的声明要到下一轮检查才看得见
+    它们。挂在建档这一行下面派，链就停在 `MAX_FOLLOWUP_DEPTH` 的第二层。
+    """
+    if not entity_ids or getattr(handle, "run_id", None) is None:
+        return {"followups": 0}
+    rows = declared_rows(creator_profile_followup.declared_for(contract, entity_ids))
+    result = handle.store.enqueue_followups(handle.run_id, rows) if rows else {"queued": []}
+    runner = getattr(contract, "followups", None)
+    if result["queued"] and runner is not None:
+        runner.wake()
+    return {"followups": len(result["queued"])}
 
 
 def _referenced(connection: sqlite3.Connection, entity_id: int) -> bool:

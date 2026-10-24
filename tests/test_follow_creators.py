@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from peach import follow_creators, web_follow
 from peach.follow_sources import FollowCandidate, SourceFetch
 from peach.follow_store import FollowStore
+from peach.task_runs import TaskRunHandle
 from peach.web_contract import WebContract, dispatch_api_get, dispatch_api_post
 from peach.web_entity import q_entity
 from peach.follow_identity import author_key
@@ -57,6 +59,22 @@ class FollowCreatorTests(unittest.TestCase):
 
     def run_followup(self):
         return follow_creators.run(self.contract, "follow-creator:all", None)
+
+    def run_in_task(self):
+        """在任务中心的一行下面跑建档，返回摘要和「有没有叫醒后继通道」。"""
+        run = self.contract.task_runs.start("follow-creator", trigger="manual")
+        self.addCleanup(self.contract.task_runs.finish, run.id, "succeeded")
+        woken = []
+        # 真通道一被叫醒就去取页，这一层判的是「派没派」，不是取页本身。
+        self.contract.followups = SimpleNamespace(wake=lambda: woken.append(1))
+        summary = follow_creators.run(self.contract, "follow-creator:all",
+                                      TaskRunHandle(self.contract.task_runs, run.id))
+        return summary, woken
+
+    def queued_followups(self):
+        return [tuple(row) for row in self.read(
+            "SELECT followup_key,task_key,status FROM task_run"
+            " WHERE followup_key IS NOT NULL ORDER BY id")]
 
     def read(self, sql, *args):
         with self.contract.database.read_connection() as connection:
@@ -163,6 +181,34 @@ class FollowCreatorTests(unittest.TestCase):
         self.assertEqual([row["key"] for row in result["followups"]], ["follow-creator:all"])
         self.run_followup()
         self.assertEqual(web_follow._run_follow_check(self.contract, {"sources": []})["followups"], [])
+
+    def test_a_new_creator_gets_its_profile_followup_in_the_round_that_builds_it(self):
+        """ADR-0115：第一次关注检查之后就有头像与资料。
+
+        补资料后继挂在建档这一行下面，判据是「这一轮建出来的那几位」；等下一轮检查再派，
+        资料页上就先只有名字和首字母。
+        """
+        self.source("pornhub", "mini-diva", "mini diva")
+        summary, woken = self.run_in_task()
+        entity_id = self.read("SELECT id FROM entity WHERE kind='creator'")[0][0]
+        self.assertEqual(summary["followups"], 1)
+        self.assertEqual(self.queued_followups(),
+                         [(f"creator-profile:{entity_id}", "creator-profile", "pending")])
+        self.assertEqual(woken, [1], "派出去的那条要叫醒通道，否则它等到下一轮检查才动")
+
+    def test_a_creator_whose_sources_carry_no_profile_page_gets_no_followup(self):
+        self.jul3d()
+        summary, woken = self.run_in_task()
+        self.assertEqual(summary["followups"], 0)
+        self.assertEqual(self.queued_followups(), [])
+        self.assertEqual(woken, [])
+
+    def test_the_profile_followup_is_declared_once_for_each_new_creator(self):
+        self.source("pornhub", "mini-diva", "mini diva")
+        self.run_in_task()
+        summary, _ = self.run_in_task()
+        self.assertEqual((summary["created"], summary["followups"]), (0, 0))
+        self.assertEqual(len(self.queued_followups()), 1)
 
     def test_author_key_follows_the_binding(self):
         self.jul3d()
