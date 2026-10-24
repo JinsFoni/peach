@@ -452,47 +452,88 @@ class FollowMediaResolver:
     #: 免得把一批已经 410 的地址反复交给播放器。
     PLAYLIST_TTL = 120.0
 
+    #: 作品页会把清单地址写成两种之一：带 `validfrom`／`validto` 的那种取回 200，只剩一个
+    #: `?h=` 哈希的那种取回 410。同一条作品连着取页面会换一种，实测取回可用清单的概率约
+    #: 四成，所以取回清单验证一遍，验不过就换一次页面重来；每次换页带一个没用过的参数，
+    #: 绕开边缘缓存里那一份。六次能把可用清单的概率提到九成五以上。
+    PORNHUB_ATTEMPTS = 6
+
+    #: 验证清单只取开头这一截：`#EXTM3U` 加几行 `EXT-X-STREAM-INF` 就够判。
+    PLAYLIST_PROBE_BYTES = 64 * 1024
+
     def _fetch_pornhub(self, item: FollowItemRow) -> ResolvedFollowMedia:
-        """抓一次作品页，从 `mediaDefinitions` 里取 HLS 各档并写进缓存。
+        """抓作品页，从 `mediaDefinitions` 里取 HLS 各档，把能取回的那一种写进缓存。
 
         这个站不给可播的渐进式 mp4：`format=mp4` 那条指向 `/video/get_media`，
         匿名请求回空数组。所以这里只认 `format=hls`。
         """
-        response = self.fetch(
-            item.provider,
-            HttpRequest("GET", item.url, {"User-Agent": USER_AGENT,
-                                           "Accept": "text/html"}),
-            self.timeout, self.max_bytes,
-        )
-        if response.status != 200 or len(response.body) > self.max_bytes:
-            LOGGER.warning("pornhub watch page for follow item %s unavailable: HTTP %s",
-                           item.id, response.status)
-            self._remember_miss(item.id)
-            raise FollowMediaUnavailable("Pornhub 作品页未取得")
-        found: list[tuple[int, str]] = []
-        for entry in pornhub_media_definitions(response.body.decode("utf-8", errors="replace")):
-            url = str(entry.get("videoUrl") or "")
-            if not url or not _allowed(item.provider, url):
+        for attempt in range(self.PORNHUB_ATTEMPTS):
+            response = self.fetch(
+                item.provider,
+                HttpRequest("GET", _pornhub_page_attempt(item.url, attempt),
+                            {"User-Agent": USER_AGENT, "Accept": "text/html"}),
+                self.timeout, self.max_bytes,
+            )
+            if response.status != 200 or len(response.body) > self.max_bytes:
+                LOGGER.warning("pornhub watch page for follow item %s unavailable: HTTP %s",
+                               item.id, response.status)
                 continue
-            try:
-                height = int(entry.get("height") or 0)
-            except (TypeError, ValueError):
-                height = 0
-            if all(existing != url for _, existing in found):
-                found.append((height, url))
-        if not found:
-            LOGGER.warning("pornhub watch page for follow item %s has no hls url", item.id)
-            self._remember_miss(item.id)
-            raise FollowMediaUnavailable("Pornhub 正片地址未取得")
-        ordered = sorted(found, key=lambda row: row[0], reverse=True)
-        resolved = ResolvedFollowMedia(
-            ordered[0][1], item.url,
-            qualities=tuple(ordered),
-            allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
-            playlist=True)
-        with self._lock:
-            self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
-        return resolved
+            found: list[tuple[int, str]] = []
+            for entry in pornhub_media_definitions(
+                    response.body.decode("utf-8", errors="replace")):
+                url = str(entry.get("videoUrl") or "")
+                if not url or not _allowed(item.provider, url):
+                    continue
+                try:
+                    height = int(entry.get("height") or 0)
+                except (TypeError, ValueError):
+                    height = 0
+                if all(existing != url for _, existing in found):
+                    found.append((height, url))
+            if not found:
+                LOGGER.warning("pornhub watch page for follow item %s has no hls url", item.id)
+                continue
+            ordered = sorted(found, key=lambda row: row[0], reverse=True)
+            if not self._pornhub_playlist_ready(item, ordered[0][1]):
+                LOGGER.warning("pornhub playlist for follow item %s is not playable", item.id)
+                continue
+            resolved = ResolvedFollowMedia(
+                ordered[0][1], item.url,
+                qualities=tuple(ordered),
+                allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
+                playlist=True)
+            with self._lock:
+                self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
+            return resolved
+        self._remember_miss(item.id)
+        raise FollowMediaUnavailable("Pornhub 正片地址未取得")
+
+    def _pornhub_playlist_ready(self, item: FollowItemRow, url: str) -> bool:
+        """取回一次清单，确认这一档真的能播。
+
+        换档要用的另外几档是同一份页面给的，签法一致，验一档就够。
+        """
+        try:
+            response = self.fetch(
+                item.provider,
+                HttpRequest("GET", url, {"User-Agent": USER_AGENT}),
+                self.timeout, self.PLAYLIST_PROBE_BYTES,
+            )
+        except (OSError, httpx.HTTPError) as error:
+            LOGGER.warning("pornhub playlist probe for follow item %s failed: %s", item.id, error)
+            return False
+        return (response.status == 200
+                and response.body.lstrip().startswith(b"#EXTM3U"))
+
+
+def _pornhub_page_attempt(url: str, attempt: int) -> str:
+    """第几次取作品页：换一次页面就在地址上带一个没用过的参数，绕开边缘缓存里那一份。"""
+    if attempt <= 0:
+        return url
+    parts = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    query.append(("_", f"{attempt}{int(time.time() * 1000)}"))
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
 
 
 def pornhub_media_definitions(text: str) -> tuple[dict, ...]:

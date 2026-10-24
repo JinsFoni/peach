@@ -118,8 +118,23 @@ slug，抓取站固定是 `cn.pornhub.com`。
   **没有** `EXT-X-KEY`（不加密），也没有 `EXT-X-MAP`。
 - 因而不是 ADR-0016 记录的 HEVC-in-TS 黑屏情形，但仍然是 HLS：Peach 只能按清单转发。
 
+### 清单地址的两种写法
+
+作品页内嵌的 `mediaDefinitions` 有两种签名写法，同一部作品连着取页面会交替出现：
+
+| 写法 | 形如 | 取回 |
+| --- | --- | --- |
+| 时间戳签名 | `…/master.m3u8?validfrom=…&validto=…&ipa=1&hdl=-1&hash=…` | HTTP 200，`application/vnd.apple.mpegurl` |
+| 只剩哈希 | `…/master.m3u8?h=…` | HTTP 410，正文一个字节 |
+
+2026-10-24 在中文站连取二十次同一作品页：按原地址请求多半拿到 `?h=` 那一种；在地址
+上带一个没用过的查询参数重取会换一种，约四成能取回 200。换 `User-Agent`、加
+`Referer`、`Origin`、`Range` 都改变不了 `?h=` 那一种的 410，同一出口 IP 下也如此。
+
+把 `?h=` 那一种的主机从 `hv-h.phncdn.com` 换成 `ev-h.phncdn.com` 能取回清单，但清单
+里的分片在 `ev-h` 上回 404——分片只在页面自己指的那个主机上有，换主机这一路走不通。
+浏览器 TLS 指纹（curl-impersonate）取 `?h=` 那一种回 412 `request incorrect`，也不行。
+
 ### 未取得
 
 - `get_media` 的有效响应没能取得（匿名恒为空数组），所以没有渐进式 mp4 这一路。
-- 短时间连续取同一作品页后，清单地址一度回 HTTP 410；同一地址数分钟后重新取回为
-  200。取不到时按「上游这一次没给」处理，不据此改判来源可用性。
