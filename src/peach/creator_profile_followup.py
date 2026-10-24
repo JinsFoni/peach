@@ -14,7 +14,10 @@
    （`avatar_picker.install`，`source_kind` 记 `official_profile`）。人自己挑过的图从不覆盖。
    站上这一枚只有 200×200，比自动补头像的像素门槛小——发布账号没有作品可供截脸，
    这一档已经是最清楚的一版。
-4. **多久再派**：写成了保 `REFRESH`（30 天）：体重、兴趣、订阅数这些都会变；一次都没写成
+4. **什么时候派**：关注检查结算时声明一批（ADR-0040）；建档后继刚建出来的那几位由它
+   当场再派一次（`declared_for`），所以新关注的作者在这一次检查里就带上头像与资料，不必
+   等到下一轮。
+5. **多久再派**：写成了保 `REFRESH`（30 天）：体重、兴趣、订阅数这些都会变；一次都没写成
    只保 `RETRY_UNFETCHED`，站点抽风不该等到下个月。
 
 资料行带批次号，`scripts/revert_auto_landing.py --source auto:creator-profile` 按
@@ -111,14 +114,26 @@ def fingerprint(connection, avatar_root, entity_id: int) -> str:
 
 
 def plan(connection, avatar_root, attempts, *, limit: int = DECLARE_LIMIT,
-         skip=()) -> list[Followup]:
-    """此刻需要补资料的创作者，一个实体一条后继。跑过又没变的按指纹跳过。"""
+         skip=(), entity_ids=None) -> list[Followup]:
+    """此刻需要补资料的创作者，一个实体一条后继。跑过又没变的按指纹跳过。
+
+    `entity_ids` 给定时只看这几位：建档那一轮刚建出来的创作者当场派出去（ADR-0115）。
+    """
     if limit <= 0:
         return []
     skip = set(skip)
+    if entity_ids is None:
+        rows = connection.execute(
+            "SELECT id,canonical_name FROM entity WHERE kind='creator' ORDER BY id")
+    else:
+        ids = [int(value) for value in entity_ids]
+        if not ids:
+            return []
+        rows = connection.execute(
+            "SELECT id,canonical_name FROM entity WHERE kind='creator' AND id IN ("
+            + ",".join("?" * len(ids)) + ") ORDER BY id", ids)
     found: list[Followup] = []
-    for row in connection.execute(
-            "SELECT id,canonical_name FROM entity WHERE kind='creator' ORDER BY id"):
+    for row in rows:
         entity_id = int(row["id"])
         key = followup_key(entity_id)
         if key in skip or not needs(connection, avatar_root, entity_id):
@@ -132,12 +147,28 @@ def plan(connection, avatar_root, attempts, *, limit: int = DECLARE_LIMIT,
     return found
 
 
+def _declared_rows(found: list[Followup]) -> list[dict]:
+    return [{"key": item.key, "task_key": item.task_key, "label": item.label} for item in found]
+
+
 def declare(contract) -> list[dict]:
     """关注检查结束时声明该补资料的创作者（ADR-0040）。"""
     attempts = Attempts(attempts_root(contract.candidate_root))
     with contract.database.read_connection() as connection:
         found = plan(connection, contract.avatar_root, attempts)
-    return [{"key": item.key, "task_key": item.task_key, "label": item.label} for item in found]
+    return _declared_rows(found)
+
+
+def declared_for(contract, entity_ids) -> list[dict]:
+    """刚建出来的创作者当场派一条补资料后继（ADR-0115）。
+
+    关注检查结算时这些实体还不存在——建档本身是一条后继——所以那边的声明要到下一轮检查
+    才看得见它们，资料页上就只挂着名字和首字母。建档那一轮把它们交给这里，一条链走完。
+    """
+    attempts = Attempts(attempts_root(contract.candidate_root))
+    with contract.database.read_connection() as connection:
+        found = plan(connection, contract.avatar_root, attempts, entity_ids=entity_ids)
+    return _declared_rows(found)
 
 
 def run(contract, key: str, handle) -> dict:
