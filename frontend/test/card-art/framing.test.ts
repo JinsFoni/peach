@@ -266,6 +266,20 @@ describe('加载微光', () => {
     vi.advanceTimersByTime(1000);
     expect(img.parentElement!.classList.contains('ui-imgdone')).toBe(false);
   });
+
+  it('卡面的封面在路上时也给微光：那一格底色是黑的，没有它就是一块黑', () => {
+    const host = mount('<div data-media-pic><img src="/follow-image?id=1"></div>'
+      + '<div data-media-pic><img src="/follow-image?id=2"></div>');
+    const waiting = host.querySelector<HTMLImageElement>('img[src="/follow-image?id=1"]')!;
+    const ready = host.querySelector<HTMLImageElement>('img[src="/follow-image?id=2"]')!;
+    Object.defineProperty(waiting, 'complete', { configurable: true, value: false });
+    sized(ready, 320, 180);
+    watchPendingImages(host);
+    expect(waiting.parentElement!.classList.contains('imgwait')).toBe(true);
+    expect(ready.parentElement!.classList.contains('imgwait')).toBe(false);
+    settleImage(waiting);
+    expect(waiting.parentElement!.classList.contains('imgwait')).toBe(false);
+  });
 });
 
 describe('installCardArt：全站一组捕获监听', () => {
