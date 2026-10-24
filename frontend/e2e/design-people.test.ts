@@ -576,6 +576,51 @@ describe('设计决定：人物与厂牌资料页', () => {
     });
   }
 
+  /* 内容区 700 上下：已经不是宽屏那一档（`data-hero-wide` 要 900），又还没到单列的 760px 断点，
+   *  资料卡仍是「头像 + 名字」两列。 */
+  const SIDE_BY_SIDE = { name: 'side-by-side', width: 900, height: 900, mobile: false };
+  it('发布账号的简介铺满整行：窄一档下名字那一列不被那段话挤成零宽', { timeout: 60_000 }, async () => {
+    const opened = await visit(browser, '/', SIDE_BY_SIDE);
+    try {
+      const page = opened.page;
+      await page.route(/\/api\/entity\?/, (route) => route.fulfill({ json: {
+        id: 90_301, kind: 'creator', canonical_name: 'mini diva', aliases: [], display_aliases: [],
+        user_aliases: [], asset_count: 0, tags: [], related_performers: [], links: [], metadata: {},
+        has_image: false, has_avatar: false, avatar_focus: null, representative_asset_id: null,
+        feed: { following: false },
+        profile: {
+          bio: 'Love being here from time to time. I enjoyed my PornHub era, for more lovely stuff you can visit my blog on OnlyFans.',
+          about: [{ label: '感情', value: '单身', glyph: 'heart' }],
+          rank: { label: '模特排名', value: '266', glyph: 'crown' },
+          links: [{ label: 'Twitter', url: 'https://twitter.com/minidivaonly', glyph: 'brand-x' }],
+        },
+      } }));
+      await page.goto(new URL('/creators/mini%20diva', page.url()).href, { waitUntil: 'load' });
+      await page.locator('[data-entity-bio]').waitFor({ timeout: 15_000 });
+      await settle(page);
+      const measured = await page.evaluate(() => {
+        const profile = document.querySelector('[data-entity-profile]')!;
+        const [identity, name, bio, side, card] = [
+          '[data-entity-identity]', '[data-entity-identity] h2', '[data-entity-bio]',
+          '[data-entity-side]', '[data-entity-card]'].map((selector) => profile.querySelector(selector)!);
+        const box = (element: Element) => element.getBoundingClientRect();
+        return { identity: box(identity).width, name: box(name).height, bio: box(bio).width,
+                 bioBottom: box(bio).bottom, sideTop: box(side).top, side: box(side).width,
+                 card: box(card).width, wide: document.querySelector('#index')!.hasAttribute('data-hero-wide') };
+      });
+      assert.equal(measured.wide, false, '这一档该是两列的窄屏，不是宽屏那一套排布');
+      assert.ok(measured.identity > 120, `名字那一列只剩 ${measured.identity}px，被简介挤平了`);
+      assert.ok(measured.name < 40, `名字排成 ${measured.name}px 高的一列，一个字一行`);
+      /* 简介与右栏都铺满整行，各自从卡的左内边距起、到右内边距止。 */
+      assert.ok(Math.abs(measured.bio - (measured.card - 40)) < 1.5, `简介宽 ${measured.bio}px，卡 ${measured.card}px`);
+      assert.ok(Math.abs(measured.side - (measured.card - 40)) < 1.5, `右栏宽 ${measured.side}px，卡 ${measured.card}px`);
+      assert.ok(measured.sideTop >= measured.bioBottom, '右栏排在简介前面了');
+      assert.deepEqual(opened.problems, []);
+    } finally {
+      await opened.close();
+    }
+  });
+
   it('看片那一行：两枚标识隔 32px、按 22px 字高对齐；MISSAV 按它站上的排字，AV 用它的粉；第二枚带序号', { timeout: 60_000 }, async () => {
     const name = '七沢みあ';
     const opened = await visit(browser, '/', DESKTOP);
