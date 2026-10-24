@@ -2,8 +2,8 @@
  *
  * 资料卡按 Board 的 profile 卡排：一块 secondary 底、18px 圆角的卡，正文是头像加身份三行
  * （名字、别名与归属、外链），女优有资料时右边再加一栏资料表，同台艺人收进卡底那条色阶带——
- * 那是这个人的附注，不是这一页的正文。发布账号在站上的简介与资料表排在卡下面按列铺开
- * （ADR-0115）：卡里那一栏只留认人那五项。卡外面的交集条、筛选条与内容区仍归壳。
+ * 那是这个人的附注，不是这一页的正文。身材那一格跟名字、计数排在一起，发布账号在站上的简介与
+ * 资料表接在它后面、同一列里按列铺开（ADR-0116）。卡外面的交集条、筛选条与内容区仍归壳。
  *
  * 头像、同台艺人的脸和新作卡是拼好的 HTML（大位与新作卡由壳给，同台艺人的脸取自 `@peach/card-art`）：
  * 取图失败时兜底链（`card-art/image-fallback.ts`）会把 `<img>`
@@ -25,9 +25,9 @@ import { Glyph } from './glyph';
 import { FeedSwitch, MorePop } from './hero-pop';
 import { NamePicker } from './name-picker';
 import {
-  COMPANY_ALIASES_SHOWN, aboutPanel, agencyOf, companyFactRows, entityFeedTip, entryMarks, factRows, heroLinks, isCompany, isPeople, nameChoices, nameLine, shownTags,
+  COMPANY_ALIASES_SHOWN, aboutPanel, agencyOf, companyFactRows, entityFeedTip, entryMarks, factRows, heroLinks, isCompany, isPeople, nameChoices, nameLine, shownTags, sizeRow,
   type EntityHeroActions, type EntityHeroData, type EntityHeroHelpers, type EntityHeroProps,
-  type HeroAboutItem, type HeroCostar, type HeroFollow, type LinkMark, type LinkView,
+  type FactRow, type HeroAboutItem, type HeroCostar, type HeroFollow, type LinkMark, type LinkView,
 } from './entity-hero';
 
 /** 同台艺人圆框里那张图：实体图优先，退到代表作头像，按检出的人脸取景。 */
@@ -42,6 +42,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
   const people = isPeople(kind);
   const company = isCompany(kind);
   const facts = people ? factRows(entity.profile) : company ? companyFactRows(entity.company_profile) : [];
+  const size = people ? sizeRow(entity.profile) : null;
   const about = people ? aboutPanel(entity.profile) : { bio: '', items: [] };
   const links = heroLinks(entity, kind);
   const marks = entryMarks(entity);
@@ -74,6 +75,11 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
               {entity.id ? <FavoriteButton item={{ entity_id: Number(entity.id), kind, name: entity.canonical_name || name, favorite: entity.favorite }} /> : null}
             </div>
             <AliasLine kind={kind} entity={entity} actions={actions} />
+            {size ? (
+              <dl data-entity-size="">
+                <FactRowView glyph={size.glyph} label={size.label} clip={size.clip}><FactParts row={size} /></FactRowView>
+              </dl>
+            ) : null}
             {entity.related_identities?.length ? (
               <div className="flex min-w-0 flex-wrap gap-2 text-caption-1-regular text-text-secondary">
                 {/* 账号名常是一长串无空格的英文，窄屏下得能在任意处折行。 */}
@@ -98,17 +104,11 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
           {facts.length ? (
             <dl data-entity-facts="">
               {facts.map((row) => (
-                <FactRowView key={row.label} glyph={row.glyph} label={row.label} clip={row.clip}>
-                  {row.tags ? <FactTags tags={row.tags} />
-                    : row.parts.map((part, at) => (
-                      <span key={at} data-fact-tone={part.tone === 'plain' ? undefined : part.tone}>
-                        {at ? ' ' : ''}{part.text}
-                      </span>
-                    ))}
-                </FactRowView>
+                <FactRowView key={row.label} glyph={row.glyph} label={row.label} clip={row.clip}><FactParts row={row} /></FactRowView>
               ))}
             </dl>
           ) : null}
+          {about.items.length || about.bio ? <AboutPanel about={about} /> : null}
         </div>
         {costars.length ? (
           <div data-entity-foot="" aria-label="同台艺人">
@@ -125,7 +125,6 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
           </div>
         ) : null}
       </section>
-      {about.items.length || about.bio ? <AboutPanel about={about} /> : null}
       {/* 新作那一行摆在壳留好的 `section.feednew[data-feed-new]` 里，与首页那一行同一个组件。 */}
       {feedHost ? createPortal(<FeedNewRow feedNew={feedNew} host={feedHost} wire={helpers.wireFeedRow}
         act={(feedId, action) => actions.feedAction(feedId, action)} />, feedHost) : null}
@@ -291,8 +290,8 @@ function NameGroup({ label, names }: { label?: string; names: { name: string; re
 
 /** 发布账号在站上那一页：资料表按列铺开，简介收在末尾。
  *
- *  这些读数（感情、取向、出身地、体重、纹身……）够写满十几行，塞进资料卡那一栏会把卡撑得
- *  比这一页的主角还高；排在卡下面，宽度够了就并成几列。 */
+ *  这些读数（感情、取向、出身地、体重、纹身……）有十几行，排在资料卡里名字那一列下面，
+ *  宽度够了就并成几列。 */
 function AboutPanel({ about }: { about: { bio: string; items: HeroAboutItem[] } }) {
   return (
     <section data-entity-about="" aria-label="站上资料">
@@ -308,6 +307,19 @@ function AboutPanel({ about }: { about: { bio: string; items: HeroAboutItem[] } 
       ) : null}
       {about.bio ? <p data-about-bio=""><b>简介</b><span>{about.bio}</span></p> : null}
     </section>
+  );
+}
+
+/** 一行资料的几段取值：标签那一格画标签，其余按段排，段间一个空格。 */
+function FactParts({ row }: { row: FactRow }) {
+  return row.tags ? <FactTags tags={row.tags} /> : (
+    <>
+      {row.parts.map((part, at) => (
+        <span key={at} data-fact-tone={part.tone === 'plain' ? undefined : part.tone}>
+          {at ? ' ' : ''}{part.text}
+        </span>
+      ))}
+    </>
   );
 }
 

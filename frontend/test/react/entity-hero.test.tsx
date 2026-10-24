@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntityHeroPage } from '../../src/react/entity-hero/entity-hero-page';
 import {
-  aboutPanel, factRows, heroLinks, nameChoices, nameLine, shownTags,
+  aboutPanel, factRows, heroLinks, nameChoices, nameLine, shownTags, sizeRow,
   type EntityHeroActions, type EntityHeroData, type EntityHeroHelpers, type EntityHeroProps,
 } from '../../src/react/entity-hero/entity-hero';
 import { queryClient } from '../../src/react/query';
@@ -74,7 +74,7 @@ describe('排版用的纯函数', () => {
       canonical_name: 'RiaKurumi', identity_labels: ['女优','网黄博主'],
       profile: { height: 149 }, name_groups: { shown: ['Ria Kurumi', '百田くるみ'], total: 2 },
     }) }));
-    expect(host.querySelector('[data-entity-facts]')?.textContent).toContain('T149');
+    expect(host.querySelector('[data-entity-size]')?.textContent).toContain('T149');
     expect(host.querySelector('[data-alias-names]')?.textContent).toContain('百田くるみ');
     expect(host.querySelector('[data-meta-item][title="视频"] use')?.getAttribute('href')).toBe('#i-film');
   });
@@ -129,14 +129,20 @@ describe('排版用的纯函数', () => {
       birth_date: '1990-08-14', age: 36, height: 163, bust: 88, cup: 'E',
       debut_date: '2012-03-01', debut_title: '很长的出道片名', active: { from: '2012', ongoing: true }, tags: ['巨乳'],
     });
-    expect(rows.map((row) => row.label)).toEqual(['生日', '身材', '出道', '生涯', '标签']);
+    expect(rows.map((row) => row.label)).toEqual(['生日', '出道', '生涯', '标签']);
     // 一枚字形只代表一个意思：标签那一项与标签页同一枚。
-    expect(rows.map((row) => row.glyph)).toEqual(['cake', 'ruler', 'flag', 'calendar-range', 'tags']);
-    expect(rows[1]?.parts.map((part) => part.text)).toEqual(['T163 · B88', '· E 罩杯']);
-    expect(rows[2]?.clip).toBe('很长的出道片名');
-    expect(rows[3]?.parts[0]?.text).toBe('2012 – 至今');
-    expect(factRows({ cup: 'C' })[0]?.parts).toEqual([{ text: 'C 罩杯', tone: 'sub' }]);
+    expect(rows.map((row) => row.glyph)).toEqual(['cake', 'flag', 'calendar-range', 'tags']);
+    expect(rows[1]?.clip).toBe('很长的出道片名');
+    expect(rows[2]?.parts[0]?.text).toBe('2012 – 至今');
     expect(factRows(null)).toEqual([]);
+  });
+
+  it('身材单独一格：身高、三围与罩杯合在一起，取不到就不出这一格', () => {
+    expect(sizeRow({ height: 163, bust: 88, cup: 'E' }))
+      .toEqual({ glyph: 'ruler', label: '身材', parts: [{ text: 'T163 · B88', tone: 'num' }, { text: '· E 罩杯', tone: 'sub' }] });
+    expect(sizeRow({ cup: 'C' })).toEqual({ glyph: 'ruler', label: '身材', parts: [{ text: 'C 罩杯', tone: 'sub' }] });
+    expect(sizeRow({ height: 0, bust: 0 })).toBeNull();
+    expect(sizeRow(null)).toBeNull();
   });
 
   it('外链：外部入口排最前；女优页连官网也是图标，链回她所属事务所的写「官方资料」；失效与私人来源不可点', () => {
@@ -210,7 +216,7 @@ describe('画出什么', () => {
     expect(performerLine).not.toContain('事务所');
   });
 
-  it('发布账号在站上的简介与资料表排在资料卡下面，卡里仍旧只有那五项', async () => {
+  it('发布账号在站上的简介与资料表排进资料卡，接在身材那一格下面', async () => {
     const host = await open(props({ kind: 'creator', name: 'mini diva', entity: {
       id: 1, canonical_name: 'mini diva', asset_count: 0,
       profile: {
@@ -230,10 +236,16 @@ describe('画出什么', () => {
       '简介Love being here from time to time.');
     // 标签与正文分两个盒子，正文才落进值那一列。
     expect(panel.querySelector('[data-about-bio] b')?.nextElementSibling?.tagName).toBe('SPAN');
-    // 身高与三围在卡里「身材」那一格，不在资料表里再来一遍。
-    const card = host.querySelector('[data-entity-facts]')!.textContent ?? '';
-    expect(card).toContain('T167 · B89 · W64 · H91');
+    // 身高与三围在名字下面「身材」那一格，不在资料表里再来一遍。
+    const size = host.querySelector('[data-entity-size]')!;
+    expect(size.textContent).toBe('身材T167 · B89 · W64 · H91');
     expect(panel.textContent).not.toContain('167');
+    // 两者都在卡里、都在名字那一列：身材在资料上面，中间没有别的资料表。
+    expect(panel.closest('[data-entity-card]')).not.toBeNull();
+    expect(panel.closest('[data-entity-identity]')).toBeNull();
+    expect(size.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 只剩身材这一项时，右边那张资料表不再画。
+    expect(host.querySelector('[data-entity-facts]')).toBeNull();
   });
 
   it('没有站上资料的账号不画那一栏，页面上也没有空的一块', async () => {

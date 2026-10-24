@@ -50,8 +50,8 @@ export interface HeroAboutItem {
 
 /** 女优页头右侧的资料表（ADR-0069）。服务端只下发有值的项。
  *
- *  `bio` 与 `about` 是发布账号在站上的那一页：资料卡只留认人那五项，这些读数排在卡下面
- *  （ADR-0115）。 */
+ *  `bio` 与 `about` 是发布账号在站上的那一页：这些读数进资料卡，排在名字与身材下面
+ *  （ADR-0115、ADR-0116）。 */
 export interface HeroProfile {
   birth_date?: string;
   age?: number;
@@ -269,7 +269,18 @@ export function companyFactRows(profile: EntityHeroData['company_profile']): Fac
     : []);
 }
 
-/** 资料表的五项：生日、身材、出道、生涯、标签。有哪项画哪项。仍在活跃的写「至今」。 */
+/** 身材那一行：身高、三围与罩杯合成一格，跟在名字下面（ADR-0116）。取不到就不画。 */
+export function sizeRow(p: HeroProfile | null | undefined): FactRow | null {
+  if (!p) return null;
+  const size = ([['T', p.height], ['B', p.bust], ['W', p.waist], ['H', p.hip]] as const)
+    .filter(([, value]) => value).map(([letter, value]) => `${letter}${value}`).join(' · ');
+  const cup = p.cup ? `${size ? '· ' : ''}${p.cup} 罩杯` : '';
+  if (!size && !cup) return null;
+  return { glyph: 'ruler', label: '身材', parts: [
+    ...(size ? [{ text: size, tone: 'num' as const }] : []), ...(cup ? [{ text: cup, tone: 'sub' as const }] : [])] };
+}
+
+/** 资料表的四项：生日、出道、生涯、标签。有哪项画哪项。仍在活跃的写「至今」。 */
 export function factRows(p: HeroProfile | null | undefined): FactRow[] {
   if (!p) return [];
   const rows: FactRow[] = [];
@@ -277,11 +288,6 @@ export function factRows(p: HeroProfile | null | undefined): FactRow[] {
   if (p.birth_date) rows.push({ glyph: 'cake', label: '生日', parts: [
     { text: p.birth_date, tone: 'num' },
     ...(Number.isFinite(p.age) ? [{ text: `· ${p.age} 岁`, tone: 'sub' as const }] : [])] });
-  const size = ([['T', p.height], ['B', p.bust], ['W', p.waist], ['H', p.hip]] as const)
-    .filter(([, value]) => value).map(([letter, value]) => `${letter}${value}`).join(' · ');
-  const cup = p.cup ? `${size ? '· ' : ''}${p.cup} 罩杯` : '';
-  if (size || cup) rows.push({ glyph: 'ruler', label: '身材', parts: [
-    ...(size ? [{ text: size, tone: 'num' as const }] : []), ...(cup ? [{ text: cup, tone: 'sub' as const }] : [])] });
   if (p.debut_date || p.debut_title) rows.push({ glyph: 'flag', label: '出道', clip: p.debut_title || undefined, parts: [
     ...(p.debut_date ? [{ text: p.debut_date, tone: 'num' as const }] : []),
     ...(p.debut_title ? [{ text: p.debut_title, tone: 'sub' as const }] : [])] });
@@ -294,7 +300,7 @@ export function factRows(p: HeroProfile | null | undefined): FactRow[] {
 
 /** 发布账号在站上那一页的两样东西：一段简介、一张资料表（ADR-0115）。
  *
- *  资料卡只留认人那五项，这些读数排在卡下面按列铺开；两样都空时整块不画。 */
+ *  它们跟身材一起排在资料卡里、名字那一列下面，按列铺开；两样都空时整块不画。 */
 export function aboutPanel(p: HeroProfile | null | undefined): { bio: string; items: HeroAboutItem[] } {
   const bio = (p?.bio || '').trim();
   const items = (p?.about || []).flatMap((item) => {
