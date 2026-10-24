@@ -26,9 +26,9 @@ import { Glyph } from './glyph';
 import { FeedSwitch, MorePop } from './hero-pop';
 import { NamePicker } from './name-picker';
 import {
-  COMPANY_ALIASES_SHOWN, aboutPanel, agencyOf, companyFactRows, entityFeedTip, entryMarks, factRows, heroLinks, isCompany, isPeople, nameChoices, nameLine, shownTags, sizeRow,
+  COMPANY_ALIASES_SHOWN, aboutPanel, agencyOf, companyFactRows, entityFeedTip, entryMarks, factRows, heroLinks, isCompany, isPeople, nameChoices, nameLine, shownTags, sideRail, sizeRow,
   type EntityHeroActions, type EntityHeroData, type EntityHeroHelpers, type EntityHeroProps,
-  type FactRow, type HeroAboutItem, type HeroCostar, type HeroFollow, type LinkMark, type LinkView,
+  type FactRow, type HeroAboutItem, type HeroCostar, type HeroFollow, type HeroSideLink, type LinkMark, type LinkView,
 } from './entity-hero';
 
 /** 同台艺人圆框里那张图：实体图优先，退到代表作头像，按检出的人脸取景。 */
@@ -45,6 +45,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
   const facts = people ? factRows(entity.profile) : company ? companyFactRows(entity.company_profile) : [];
   const size = people ? sizeRow(entity.profile) : null;
   const about = people ? aboutPanel(entity.profile) : { bio: '', items: [] };
+  const side = people ? sideRail(entity.profile) : { rank: null, links: [] };
   const links = heroLinks(entity, kind);
   const marks = entryMarks(entity);
   const costars = kind === 'agency' ? [] : (entity.related_performers || []);
@@ -111,6 +112,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
           ) : null}
           {about.items.length ? <AboutPanel items={about.items} /> : null}
           {about.bio ? <p data-entity-bio=""><b>简介</b><span>{about.bio}</span></p> : null}
+          {side.rank || side.links.length ? <SideRail rank={side.rank} links={side.links} /> : null}
         </div>
         {costars.length ? (
           <div data-entity-foot="" aria-label="同台艺人">
@@ -306,6 +308,38 @@ function AboutPanel({ items }: { items: HeroAboutItem[] }) {
         ))}
       </dl>
     </section>
+  );
+}
+
+/** 站上那一页的边角：那颗模特排名，与她登记的账号链接（ADR-0116）。
+ *
+ *  排在同一张卡的最右一栏：排名一行，链接一列，图标在前、名字在后，点开新窗口。牌子那几枚
+ *  是填充字形，套外链那枚圆标（`data-link-icon`）才画得出来；认不出的那格是描边的地球。 */
+function SideRail({ rank, links }: { rank: HeroAboutItem | null; links: HeroSideLink[] }) {
+  return (
+    <aside data-entity-side="" aria-label="站上读数与账号">
+      {rank ? (
+        <p data-side-rank="">
+          <Glyph name={rank.glyph || 'info'} />
+          <span>{rank.label}</span>
+          <b title={`${rank.label} ${rank.value}`}>{rank.value}</b>
+        </p>
+      ) : null}
+      {links.length ? (
+        <ul data-side-links="">
+          {links.map((link) => (
+            <li key={link.url}>
+              <a href={link.url} target="_blank" rel="noreferrer" title={link.label}>
+                <span data-link-icon={(link.glyph || '').startsWith('brand-') ? 'brand' : ''}>
+                  <Glyph name={link.glyph || 'globe'} />
+                </span>
+                <span>{link.label}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </aside>
   );
 }
 

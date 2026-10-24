@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntityHeroPage } from '../../src/react/entity-hero/entity-hero-page';
 import {
-  aboutPanel, factRows, heroLinks, nameChoices, nameLine, shownTags, sizeRow,
+  aboutPanel, factRows, heroLinks, nameChoices, nameLine, shownTags, sideRail, sizeRow,
   type EntityHeroActions, type EntityHeroData, type EntityHeroHelpers, type EntityHeroProps,
 } from '../../src/react/entity-hero/entity-hero';
 import { queryClient } from '../../src/react/query';
@@ -117,6 +117,25 @@ describe('排版用的纯函数', () => {
     expect(about.bio).toBe('Love being here from time to time.');
     expect(about.items.map((item) => item.label)).toEqual(['感情', '取向']);
     expect(aboutPanel(null)).toEqual({ bio: '', items: [] });
+  });
+
+  it('最右那一栏只画站得住的链接：不是 https、重复地址的那一条都不算', () => {
+    const side = sideRail({
+      rank: { label: '模特排名', value: ' 266 ', glyph: 'crown' },
+      links: [{ label: '官方网址', url: 'https://onlyfans.com/minidivaonly', glyph: 'globe' },
+        { label: '', url: 'https://twitter.com/minidivaonly', glyph: 'brand-x' },
+        { label: '旧地址', url: 'http://example.invalid/mini' },
+        { label: '重复', url: 'https://onlyfans.com/minidivaonly' }],
+    });
+    expect(side.rank).toEqual({ label: '模特排名', value: '266', glyph: 'crown' });
+    expect(side.links).toEqual([
+      { label: '官方网址', url: 'https://onlyfans.com/minidivaonly', glyph: 'globe' },
+      { label: 'twitter.com/minidivaonly', url: 'https://twitter.com/minidivaonly', glyph: 'brand-x' }]);
+  });
+
+  it('没有排名也没有链接时那一栏整个不画', () => {
+    expect(sideRail(null)).toEqual({ rank: null, links: [] });
+    expect(sideRail({ rank: { label: '模特排名', value: '  ' }, links: [] })).toEqual({ rank: null, links: [] });
   });
 
   it('标签只列前四个；只多出一个时直接列出来', () => {
@@ -250,6 +269,40 @@ describe('画出什么', () => {
     expect(size.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // 只剩身材这一项时，右边那张资料表不再画。
     expect(host.querySelector('[data-entity-facts]')).toBeNull();
+  });
+
+  it('站上的模特排名与她登记的账号排进卡的最右一栏', async () => {
+    const host = await open(props({ kind: 'creator', name: 'mini diva', entity: {
+      id: 1, canonical_name: 'mini diva', asset_count: 0,
+      profile: {
+        about: [{ label: '感情', value: '单身', glyph: 'heart' }],
+        rank: { label: '模特排名', value: '266', glyph: 'crown' },
+        links: [{ label: '官方网址', url: 'https://onlyfans.com/minidivaonly', glyph: 'globe' },
+          { label: 'Twitter', url: 'https://twitter.com/minidivaonly', glyph: 'brand-x' }],
+      },
+    } }));
+    const side = host.querySelector('[data-entity-side]')!;
+    expect(side.closest('[data-entity-card]')).not.toBeNull();
+    expect(side.closest('[data-entity-about]')).toBeNull();
+    expect(side.querySelector('[data-side-rank]')?.textContent).toBe('模特排名266');
+    expect(side.querySelector('[data-side-rank] use')?.getAttribute('href')).toBe('#i-crown');
+    const links = [...side.querySelectorAll('[data-side-links] a')].map((anchor) => [
+      anchor.getAttribute('href'), anchor.textContent, anchor.getAttribute('target')]);
+    expect(links).toEqual([
+      ['https://onlyfans.com/minidivaonly', '官方网址', '_blank'],
+      ['https://twitter.com/minidivaonly', 'Twitter', '_blank']]);
+    // 牌子那几枚是填充字形，得套外链那枚圆标才画得出来。
+    expect(side.querySelector('[data-side-links] [data-link-icon="brand"] use')?.getAttribute('href'))
+      .toBe('#i-brand-x');
+    // 排在最右一栏：资料表与它同在卡里，那一栏在资料表后面。
+    const panel = host.querySelector('[data-entity-about]')!;
+    expect(panel.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(side.parentElement?.hasAttribute('data-entity-profile')).toBe(true);
+  });
+
+  it('没有排名也没有链接的账号不画那一栏', async () => {
+    const host = await open(props());
+    expect(host.querySelector('[data-entity-side]')).toBeNull();
   });
 
   it('没有站上资料的账号不画那一栏，页面上也没有空的一块', async () => {

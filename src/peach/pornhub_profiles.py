@@ -16,7 +16,8 @@
 身高三围折进资料卡「身材」那一格（`T167 · B89 · W64 · H91`），资料表里不再重复列；
 体重、种族、发色这些账本没有对应列的项随 `raw` 的「资料」一起下发。站上的资料项按
 `ABOUT_FIELDS` 换成页面用语，表里还没收录的项照原文列——那是站上确有的说法，丢掉就少
-一项读数。
+一项读数。资料表之外还有两处：头像右边那几格读数（`模特排名`、播放量、订阅者）进 `raw`
+的「读数」，她自己登记的账号（`官方网址`、`Twitter`）进「社交」，图标按牌子认。
 """
 from __future__ import annotations
 
@@ -116,6 +117,12 @@ def _label(node) -> str:
     return _text(node).rstrip(":：").strip()
 
 
+#: 页上那几个社交站 → 雪碧图里的那一枚图标。名字照页上写，这里只认牌子。
+SOCIAL_GLYPHS = {"twitter": "brand-x", "x": "brand-x", "instagram": "brand-instagram",
+                 "tiktok": "brand-tiktok", "youtube": "brand-youtube",
+                 "facebook": "brand-facebook", "linktree": "brand-linktree"}
+
+
 def _avatar_url(node) -> str:
     """头像地址：只收站自己图床上的 https 直链，其余一律当没给。"""
     raw = str((node.get("src") if node is not None else "") or "").strip()
@@ -167,23 +174,36 @@ def _about(soup) -> tuple[list[dict], dict]:
 
 
 def _socials(soup) -> list[dict]:
-    """站上登记的本人账号。名字取站上那行字（`官方网址`、`Twitter`）。"""
+    """站上登记的本人账号。名字取站上那行字（`官方网址`、`Twitter`），图标按站认。"""
     found = []
     for anchor in soup.select("div.socialsColumn .socialList a[href]"):
         url = urllib.parse.urlsplit(str(anchor.get("href") or "").strip())
         if url.scheme != "https" or not url.hostname:
             continue
-        found.append({"label": _text(anchor), "url": url.geturl()})
+        label = _text(anchor)
+        found.append({"label": label, "url": url.geturl(), "glyph": _social_glyph(label)})
     return found
 
 
+def _social_glyph(label: str) -> str:
+    """那块牌子对应的雪碧图图标；认不出的（`官方网址`这种通用一格）给一枚地球。"""
+    return SOCIAL_GLYPHS.get(label.strip().casefold(), "globe")
+
+
 def _stats(soup) -> dict:
-    """头像右边那几格读数：`data-title` 带精确数字，格子里是缩写（`561M`）。"""
+    """头像右边那几格读数：`data-title` 带精确数字，格子里是缩写（`561M`）。
+
+    `模特排名` 那一格没有 `data-title`：数字在 `.big` 里，标签在 `.title` 里。
+    """
     found = {}
     for box in soup.select("div.infoBoxes .infoBox"):
         label, _, exact = str(box.get("data-title") or "").partition(":")
         if label.strip() and exact.strip():
             found[label.strip()] = exact.strip()
+            continue
+        title, big = _text(box.select_one(".title")), _text(box.select_one(".big"))
+        if title and big:
+            found[title] = big
     return found
 
 
@@ -211,10 +231,17 @@ def record(parsed: dict) -> dict:
     换算，写 `cm` 时照收。
     """
     fields = parsed.get("fields") or {}
-    profile: dict = {"tags": [],
-                     "raw": {"名前": parsed.get("name") or "",
-                             "简介": parsed.get("bio") or "",
-                             "资料": list(parsed.get("about") or [])}}
+    raw: dict = {"名前": parsed.get("name") or "",
+                 "简介": parsed.get("bio") or "",
+                 "资料": list(parsed.get("about") or [])}
+    # 站上那几格读数（模特排名、播放量、订阅者）与她自己登记的账号不进资料表，另放两把钥匙。
+    stats = dict(parsed.get("stats") or {})
+    if stats:
+        raw["读数"] = stats
+    socials = list(parsed.get("socials") or [])
+    if socials:
+        raw["社交"] = socials
+    profile: dict = {"tags": [], "raw": raw}
     height = _HEIGHT_RE.search(str(fields.get("身高") or ""))
     if height:
         profile["height_cm"] = int(height.group(1))

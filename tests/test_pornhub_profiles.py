@@ -89,7 +89,8 @@ class PageTests(unittest.TestCase):
         self.assertEqual(parsed["avatar_url"], AVATAR)
         self.assertEqual(parsed["bio"], BIO)
         self.assertEqual([item["label"] for item in parsed["socials"]], ["官方网址", "Twitter"])
-        self.assertEqual(parsed["stats"], {"视频播放量": "561,849,851", "订阅者": "1,430,676"})
+        self.assertEqual(parsed["stats"], {"模特排名": "266", "视频播放量": "561,849,851",
+                                           "订阅者": "1,430,676"})
 
     def test_the_avatar_has_to_live_on_the_sites_own_image_host(self):
         """头像地址只能取自站自己的图床：别的域来的 src 一律当没给，账本里也就没有可取的图。"""
@@ -115,6 +116,15 @@ class PageTests(unittest.TestCase):
         self.assertEqual(shown(parsed, "出生地"), "Czech Republic")
         self.assertEqual(shown(parsed, "体重"), "50 kg")
         self.assertEqual(parsed["about"][0], {"label": "感情", "value": "单身", "glyph": "heart"})
+
+    def test_the_rank_box_and_her_accounts_are_read_apart_from_the_table(self):
+        """头像右边那几格读数与她自己登记的账号另收两份：`模特排名` 那一格没有 `data-title`。"""
+        parsed = profiles.parse(page())
+        self.assertEqual(parsed["stats"]["模特排名"], "266")
+        self.assertEqual(parsed["stats"]["视频播放量"], "561,849,851")
+        self.assertEqual([(item["label"], item["glyph"]) for item in parsed["socials"]],
+                         [("官方网址", "globe"), ("Twitter", "brand-x")])
+        self.assertEqual(parsed["socials"][0]["url"], "https://onlyfans.com/minidivaonly/c1")
 
     def test_the_two_self_descriptions_the_site_asks_stay_off_the_table(self):
         """「会勾起／浇灭我性欲的是」两格答的是一句话，不是读数：站上原文照收进 `fields`，表里不列。"""
@@ -163,6 +173,16 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(row["raw"]["简介"], BIO)
         self.assertEqual([item["label"] for item in row["raw"]["资料"]],
                          labels(profiles.parse(page())))
+
+    def test_the_readings_and_her_accounts_land_in_raw(self):
+        """站上那几格读数与她自己登记的账号不进资料表：`raw` 里另起「读数」与「社交」两把钥匙。"""
+        row = profiles.record(profiles.parse(page()))
+        self.assertEqual(row["raw"]["读数"]["模特排名"], "266")
+        self.assertEqual([item["label"] for item in row["raw"]["社交"]], ["官方网址", "Twitter"])
+        self.assertEqual(row["raw"]["社交"][1]["url"], "https://twitter.com/minidivaonly")
+        # 两样都不在资料表里：读数那一栏只列认人的项。
+        self.assertNotIn("模特排名", [item["label"] for item in row["raw"]["资料"]])
+        self.assertNotIn("官方网址", [item["label"] for item in row["raw"]["资料"]])
 
     def test_a_page_with_only_a_name_writes_only_the_name(self):
         """只有名字（没填资料表、没有简介）也是一条能落库的资料行，缺的列不写。"""

@@ -7,7 +7,8 @@
 
 发布账号（ADR-0096 建出来的 `creator`）在站上有一整页自我介绍，读数是简介加十几项资料
 （感情、取向、出身地、体重、纹身……）。这些走 `about()`，前端排在资料卡下面另起一栏
-（ADR-0115）：卡里仍旧只有那五项，多出来的读数不挤它。
+（ADR-0115）：卡里仍旧只有那五项，多出来的读数不挤它。那一页上还有站给的模特排名与她
+自己登记的账号链接，走 `side()`，前端排在卡的最右一栏。
 
 别名分组的口径：
 
@@ -42,8 +43,14 @@ SHOWN = 3
 CURRENT, FORMER, OTHER = "现名", "旧名义", "其它"
 #: `raw` 里那两项的键，与资料站上的写法一致。
 _ABOUT, _BIO = "资料", "简介"
+#: `raw` 里另外两把钥匙：站上那几格读数与她自己登记的账号。
+_READINGS, _SOCIALS = "读数", "社交"
+#: 右侧那一栏取哪一格读数，以及它那枚图标（排名是展示那一侧的说法，采集不懂）。
+RANK, RANK_GLYPH = "模特排名", "crown"
 #: 资料项那几格的长度上限：一格值写四五十个字就不是读数是段落了，简介同理。
 LABEL_LIMIT, VALUE_LIMIT, BIO_LIMIT = 8, 120, 280
+#: 链接那一栏的名称上限与条数上限：一排外链不该把卡撑成一列。
+LINK_LABEL_LIMIT, LINK_LIMIT = 16, 6
 #: 图标名缺省值，雪碧图里的那一枚「i」。
 DEFAULT_GLYPH = "info"
 #: 身材一格的列 → 页头的键。
@@ -117,6 +124,41 @@ def _about_item(entry) -> dict | None:
         return None
     glyph = str(entry.get("glyph") or "").strip() or DEFAULT_GLYPH
     return {"label": label[:LABEL_LIMIT], "value": value[:VALUE_LIMIT], "glyph": glyph}
+
+
+def side(row: dict | None) -> dict:
+    """资料卡右侧那一栏：站上那颗模特排名，与她自己登记的账号。
+
+    两样都在 `raw` 里（`读数`、`社交`），页面用语与图标由采集那一侧定，这里是原样下发。
+    排名只取那一格，播放量、订阅者这些是站上的运营数字，不进卡。链接只收 https 直链：
+    页上给别的东西时点不开，也就没有画出来的道理。"""
+    raw = (row or {}).get("raw") or {}
+    found: dict = {}
+    rank = " ".join(str((raw.get(_READINGS) or {}).get(RANK) or "").split())
+    if rank:
+        found["rank"] = {"label": RANK, "value": rank[:LABEL_LIMIT], "glyph": RANK_GLYPH}
+    links: list[dict] = []
+    seen: set[str] = set()
+    for entry in raw.get(_SOCIALS) or []:
+        item = _side_link(entry)
+        if item and item["url"] not in seen:
+            seen.add(item["url"])
+            links.append(item)
+    if links:
+        found["links"] = links[:LINK_LIMIT]
+    return found
+
+
+def _side_link(entry) -> dict | None:
+    """右侧那一栏的一条链接：站自己的账号主页，名字照页上写。"""
+    if not isinstance(entry, dict):
+        return None
+    url = str(entry.get("url") or "").strip()
+    if not url.casefold().startswith("https://"):
+        return None
+    label = " ".join(str(entry.get("label") or "").split()) or url.split("//", 1)[-1]
+    glyph = str(entry.get("glyph") or "").strip() or DEFAULT_GLYPH
+    return {"label": label[:LINK_LABEL_LIMIT], "url": url, "glyph": glyph}
 
 
 def site_tags(raw: list, decisions: dict[str, str | None] | None = None) -> list[str]:
@@ -251,5 +293,5 @@ def header(connection: sqlite3.Connection, entity_id: int, canonical: str,
     """`q_entity` 给女优页并进去的两项。"""
     row = read_profile(connection, entity_id) if _has_table(connection) else None
     decisions = load_genre_decisions(connection) if row and _has_table(connection, "genre_decision") else None
-    return {"profile": {**facts(row, today or date.today(), decisions), **about(row)},
+    return {"profile": {**facts(row, today or date.today(), decisions), **about(row), **side(row)},
             "name_groups": name_groups(connection, entity_id, canonical, page_names(row))}

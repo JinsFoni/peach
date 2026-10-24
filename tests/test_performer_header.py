@@ -180,12 +180,13 @@ class AccountProfileTests(Case):
     资料行由 `pornhub_profiles.record` 规整，这里直接写它交回的那一份。
     """
 
-    def land_account(self, entity_id: int, about, bio: str = "", name: str = "Mini Diva") -> None:
+    def land_account(self, entity_id: int, about, bio: str = "", name: str = "Mini Diva",
+                     extra: dict | None = None) -> None:
         with self.connection:
             write_profile(self.connection, entity_id, {
                 "tags": [], "height_cm": 167, "bust_cm": 89, "waist_cm": 64, "hip_cm": 91,
                 "birthplace": "Czech Republic", "hobbies": "Boring AF.",
-                "raw": {"名前": name, "简介": bio, "资料": list(about)}},
+                "raw": {"名前": name, "简介": bio, "资料": list(about), **(extra or {})}},
                 source="auto:creator-profile@3", source_url="https://example.invalid/about",
                 fetched_at=STAMP)
 
@@ -220,12 +221,41 @@ class AccountProfileTests(Case):
         self.assertEqual(len(bio), performer_header.BIO_LIMIT + 1)
         self.assertTrue(bio.endswith("…"))
 
+    def test_the_rank_and_her_accounts_ride_in_the_same_profile(self):
+        """站上那颗模特排名与她登记的账号进卡里最右那一栏；播放量那种运营数字不进卡。"""
+        mini = self.entity("mini diva", kind="creator")
+        self.land_account(mini, [], extra={
+            "读数": {"模特排名": "266", "视频播放量": "561,849,851"},
+            "社交": [{"label": "官方网址", "url": "https://onlyfans.com/minidivaonly",
+                      "glyph": "globe"},
+                     {"label": "Twitter", "url": "https://twitter.com/minidivaonly",
+                      "glyph": "brand-x"}]})
+        profile = self.header(mini, "mini diva")["profile"]
+        self.assertEqual(profile["rank"], {"label": "模特排名", "value": "266", "glyph": "crown"})
+        self.assertEqual(profile["links"], [
+            {"label": "官方网址", "url": "https://onlyfans.com/minidivaonly", "glyph": "globe"},
+            {"label": "Twitter", "url": "https://twitter.com/minidivaonly", "glyph": "brand-x"}])
+
+    def test_a_link_that_is_not_https_is_not_drawn(self):
+        """点不开的地址不成一栏：只有 http 的、不是网址的、同一地址重复的，那一格都不画。"""
+        mini = self.entity("mini diva", kind="creator")
+        self.land_account(mini, [], extra={"社交": [
+            {"label": "旧地址", "url": "http://example.invalid/mini"},
+            {"label": "不是网址", "url": "minidiva"},
+            {"label": "Instagram", "url": "https://instagram.com/minidiva", "glyph": "brand-instagram"},
+            {"label": "Instagram", "url": "https://instagram.com/minidiva"}]})
+        links = self.header(mini, "mini diva")["profile"]["links"]
+        self.assertEqual(links, [{"label": "Instagram", "url": "https://instagram.com/minidiva",
+                                  "glyph": "brand-instagram"}])
+
     def test_an_account_without_a_site_profile_keeps_the_plain_header(self):
         mini = self.entity("mini diva", kind="creator")
         self.land_account(mini, [], bio="")
         profile = self.header(mini, "mini diva")["profile"]
         self.assertNotIn("about", profile)
         self.assertNotIn("bio", profile)
+        self.assertNotIn("rank", profile)
+        self.assertNotIn("links", profile)
 
 
 class ApiTests(Case):

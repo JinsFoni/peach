@@ -80,6 +80,18 @@
   grid-area: 3 / 1 / auto / -1;
 }
 
+/* 站上那一栏（模特排名与她自己登记的账号）占最右一列，跟头像、身份、资料表同处第一行：多出这一栏
+ * 时资料表让出它的宽度，读数按容器宽度自己重排。女优页那张另占一行的资料表不在此列，它下面还有
+ * 简介，那一栏排到卡底。 */
+#index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-about]):not(:has(> [data-entity-facts])):has(> [data-entity-side]) {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+#index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-about]) > [data-entity-side] { grid-area: 1 / 4; }
+#index[data-hero-wide] .peach-react [data-entity-profile]:not(:has(> [data-entity-about])) > [data-entity-side] { grid-area: 1 / 3; }
+#index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-facts]) > [data-entity-side] {
+  grid-area: 4 / 1 / auto / -1;
+}
+
 /* ── 头像 ──
  * 外面这一层只为换头像那枚加号存在：圆框自己是 `overflow:hidden`，贴在它边上的按钮放进去就没了。
  * 挂加号的宿主叠成和圆框一样大、一样位置的一块，高度与居中取圆框同一个 `--portrait-size`，加号的
@@ -446,6 +458,70 @@
   color: var(--muted);
   font-weight: inherit;
 }
+
+/* ── 站上那一栏：模特排名与她登记的账号（ADR-0116）──
+ * 站给自己那颗模特排名一行，她自己登记的账号一列，图标在前、名字在后，点开新窗口。这一块顶到
+ * 最右一列的上边（卡里其余几块居中），内容区窄下来铺满一行、接在简介后面。牌子那几枚是填充
+ * 字形，套外链那枚圆标的样式；排名那枚是描边的，按标签栏里图标的画法。 */
+.peach-react [data-entity-side] {
+  grid-column: 1 / -1;
+  align-self: start;
+  justify-self: end;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  line-height: 22px;
+  text-align: left;
+}
+#index:not([data-hero-wide]) .peach-react [data-entity-side] {
+  justify-self: stretch;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--line-soft);
+}
+.peach-react [data-side-rank] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.peach-react [data-side-rank] svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.peach-react [data-side-rank] b {
+  color: var(--ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.peach-react [data-side-links] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.peach-react [data-side-links] a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.peach-react [data-side-links] a:hover { color: var(--ink); }
 
 /* 站上的标签只是读数，不是这一页的筛选（那排在下面的筛选条里），所以是标签的脸、不接点击。 */
 .peach-react :is(dd[data-fact="tags"], [data-fact-tags]) { display: flex; flex-wrap: wrap; gap: 6px; }
