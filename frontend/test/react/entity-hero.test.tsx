@@ -228,6 +228,8 @@ describe('画出什么', () => {
     expect(panel.querySelector('dt use')?.getAttribute('href')).toBe('#i-heart');
     expect(panel.querySelector('[data-about-bio]')?.textContent).toBe(
       '简介Love being here from time to time.');
+    // 标签与正文分两个盒子，正文才落进值那一列。
+    expect(panel.querySelector('[data-about-bio] b')?.nextElementSibling?.tagName).toBe('SPAN');
     // 身高与三围在卡里「身材」那一格，不在资料表里再来一遍。
     const card = host.querySelector('[data-entity-facts]')!.textContent ?? '';
     expect(card).toContain('T167 · B89 · W64 · H91');

@@ -62474,7 +62474,7 @@ function XPe({ about: e }) {
 		"aria-label": "站上资料",
 		children: [e.items.length ? /* @__PURE__ */ (0, C.jsx)("dl", { children: e.items.map((e) => /* @__PURE__ */ (0, C.jsxs)("div", { children: [/* @__PURE__ */ (0, C.jsxs)("dt", { children: [/* @__PURE__ */ (0, C.jsx)(az, { name: e.glyph || "info" }), e.label] }), /* @__PURE__ */ (0, C.jsx)("dd", { children: e.value })] }, e.label)) }) : null, e.bio ? /* @__PURE__ */ (0, C.jsxs)("p", {
 			"data-about-bio": "",
-			children: [/* @__PURE__ */ (0, C.jsx)("b", { children: "简介" }), e.bio]
+			children: [/* @__PURE__ */ (0, C.jsx)("b", { children: "简介" }), /* @__PURE__ */ (0, C.jsx)("span", { children: e.bio })]
 		}) : null]
 	});
 }
