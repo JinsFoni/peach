@@ -3019,6 +3019,15 @@ def _source_row(**kwargs):
     return row
 
 
+def _no_avatar_contract():
+    """一张图都没装的契约替身：这几条用例只看来源自己的字段，不看实体图那一档。
+
+    实体图那一档由 `FollowCreatorAvatarTests` 用真契约和临时头像目录验。
+    """
+    return SimpleNamespace(has_entity_image=lambda kind, entity_id: False,
+                           entity_image_version=lambda kind, entity_id: "")
+
+
 class LegacyHistoryEndPayloadTests(unittest.TestCase):
     """回填到底的来源不能显示成红色错误行。
 
@@ -3028,14 +3037,14 @@ class LegacyHistoryEndPayloadTests(unittest.TestCase):
     """
 
     def test_a_terminal_backfill_error_is_reported_as_exhausted(self):
-        payload = web_follow._source_payload(_source_row(
+        payload = web_follow._source_payload(_no_avatar_contract(), _source_row(
             backfill_page=3, last_status="error", last_error="kemono 返回 HTTP 400"))
         self.assertTrue(payload["history_exhausted"])
         self.assertEqual(payload["last_status"], "not_modified")
         self.assertIsNone(payload["last_error"])
 
     def test_a_real_failure_stays_a_failure(self):
-        payload = web_follow._source_payload(_source_row(
+        payload = web_follow._source_payload(_no_avatar_contract(), _source_row(
             backfill_page=3, last_status="error", last_error="kemono 返回 HTTP 503"))
         self.assertFalse(payload["history_exhausted"])
         self.assertEqual(payload["last_status"], "error")
@@ -3043,13 +3052,13 @@ class LegacyHistoryEndPayloadTests(unittest.TestCase):
 
     def test_the_same_message_on_the_first_page_is_a_real_failure(self):
         """没往回翻过页就不可能是「翻到尽头」，那是站点真的挂了。"""
-        payload = web_follow._source_payload(_source_row(
+        payload = web_follow._source_payload(_no_avatar_contract(), _source_row(
             backfill_page=0, last_status="error", last_error="kemono 返回 HTTP 400"))
         self.assertFalse(payload["history_exhausted"])
         self.assertEqual(payload["last_status"], "error")
 
     def test_a_provider_that_never_pages_back_is_never_exhausted(self):
-        payload = web_follow._source_payload(_source_row(
+        payload = web_follow._source_payload(_no_avatar_contract(), _source_row(
             provider="f95zone", ref="50685", backfill_page=3, last_status="error",
             last_error="f95zone 返回 HTTP 404"))
         self.assertFalse(payload["history_exhausted"])
@@ -3273,6 +3282,102 @@ class FollowItemProjectionTests(unittest.TestCase):
                               ("kemono", "no-slash")):
             self.assertIsNone(web_follow._avatar_url(provider, ref),
                               f"{provider} 没有实测过的头像来源，不该猜一个")
+
+
+
+class FollowCreatorAvatarTests(unittest.TestCase):
+    """关注页那几个圆框读创作者档案里装好的那张图（ADR-0115）。
+
+    只看来源自己那两条地址（社媒官方头像、归档站镜像）的话，Pornhub 这类只给作品列表的
+    来源一个头像都给不出：资料页上这个人早有脸，关注页顶部与卡片署名却一直停在首字母。
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.db = fresh_ledger(self.root)
+        # 头像目录必须指到临时目录：不指的话判据变成「这台机器上碰巧装过哪些头像」。
+        self.avatars = self.root / "avatars"
+        self.avatars.mkdir()
+        self.contract = WebContract(
+            self.db, follow_sources_root=self.root / "sources",
+            follow_secrets_root=self.root / "secrets",
+            follow_shared_root=self.root / "shared",
+            candidate_root=self.root / "generated",
+            follow_state_root=self.root / "state",
+            avatar_root=self.avatars)
+        self.addCleanup(self.contract.stop_background_jobs)
+        self.contract.followups.stop()
+
+    def _source(self, provider="pornhub", ref="404hotfound", label="404hotfound"):
+        """一条来源，连同它的两条作品条目，绑到一位新建的创作者实体上。"""
+        with self.contract.database.write_transaction() as connection:
+            store = FollowStore(lambda: connection,
+                                sources_root=self.contract.follow_sources_root)
+            source_id = store.register(
+                provider=provider, ref=ref, label=label,
+                url=f"https://{provider}.test/{ref}", semantics="work", moment=MOMENT)
+            store.record(source_id, SourceFetch(
+                provider=provider, ref=ref, request_url=f"https://{provider}.test/{ref}",
+                semantics="work", raw_body=b"<html/>",
+                candidates=(
+                    FollowCandidate(provider=provider, external_id="1", title="一",
+                                    url=f"https://{provider}.test/{ref}/1"),
+                    FollowCandidate(provider=provider, external_id="2", title="二",
+                                    url=f"https://{provider}.test/{ref}/2"),
+                )), moment=MOMENT)
+            entity_id = connection.execute(
+                "INSERT INTO entity(kind,canonical_name,normalized_name,created_at,updated_at)"
+                " VALUES('creator',?,?,'t','t')", (label, label.casefold())).lastrowid
+            connection.execute("UPDATE follow_source SET entity_id=? WHERE id=?",
+                               (entity_id, source_id))
+        return source_id, int(entity_id)
+
+    def _install(self, entity_id: int) -> None:
+        """按 `/entity-image` 读的那个位置与文件名装一张图。"""
+        (self.avatars / f"creator-{entity_id}.img").write_bytes(b"\xff\xd8\xff\xd9")
+
+    def _source_payload(self):
+        return self._get("/api/follow")["sources"][0]
+
+    def _get(self, path, **args):
+        return dispatch_api_get(self.contract, path, args)
+
+    def test_a_bound_creator_is_drawn_with_the_avatar_in_the_ledger(self):
+        """装过图的创作者，圆框地址带内容版本：换头像后同一页立刻换脸。"""
+        _, entity_id = self._source()
+        self._install(entity_id)
+        payload = self._source_payload()
+        version = self.contract.entity_image_version("creator", entity_id)
+        self.assertTrue(version)
+        self.assertEqual(payload["entity_avatar_url"],
+                         f"/entity-image?kind=creator&id={entity_id}&thumb=1&v={version}")
+        # 这条来源自己一个头像也给不出，页面上那张脸只能来自这一档。
+        self.assertIsNone(payload["official_avatar_url"])
+        self.assertIsNone(payload["avatar_url"])
+
+    def test_a_creator_without_an_installed_avatar_stays_on_the_initial(self):
+        _, entity_id = self._source()
+        self.assertFalse(self.contract.has_entity_image("creator", entity_id))
+        self.assertIsNone(self._source_payload()["entity_avatar_url"])
+
+    def test_an_unbound_source_has_no_ledger_avatar(self):
+        """还没建上档的作者只有来源那两条地址，不能编一个实体图地址出来。"""
+        self._source()
+        with self.contract.database.write_transaction() as connection:
+            connection.execute("UPDATE follow_source SET entity_id=NULL")
+        self.assertIsNone(self._source_payload()["entity_avatar_url"])
+
+    def test_the_online_author_band_uses_the_same_face(self):
+        """艺人页「在线」那一档和关注页顶部是同一排圆框，两处两副面孔就是错。"""
+        _, entity_id = self._source()
+        self._install(entity_id)
+        row = self._get("/api/follow/authors")["items"][0]
+        self.assertEqual(row["avatar"],
+                         f"/entity-image?kind=creator&id={entity_id}&thumb=1&v="
+                         f"{self.contract.entity_image_version('creator', entity_id)}")
+        self.assertEqual(row["avatar_fallback"], "")
 
 
 if __name__ == "__main__":

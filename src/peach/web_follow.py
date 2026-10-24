@@ -1244,7 +1244,44 @@ def _avatar_url(provider: str, ref: str) -> str | None:
     return "/follow-avatar?" + urllib.parse.urlencode({"provider": provider, "ref": ref})
 
 
-def _source_payload(row, aliases: dict[str, str] | None = None) -> dict:
+def _entity_avatar_url(contract, row) -> str | None:
+    """这位创作者自己那张脸：来源绑到创作者实体、而这位已经装了头像时的圆框地址。
+
+    关注页作者行、卡片署名和艺人页在线档画的是同一个人的圆框，几处得是同一张图：
+    实体图是创作者档案的正脸（人自己挑的优先，ADR-0102），社媒主页头像与归档站镜像只在
+    没有实体图时替它。有图与否问 `contract.has_entity_image`，与 `/api/entity`、
+    `/entity-image` 同一条判据，不会一处说有、一处 404。
+
+    `thumb` 要的是圆框那一档；`v` 是这张文件的版本，换头像后同一页立刻换脸（原地覆盖
+    同一个文件，地址不带版本时浏览器会继续用内存里那张）。
+    """
+    entity_id = row["entity_id"]
+    if not entity_id or not contract.has_entity_image("creator", entity_id):
+        return None
+    params = {"kind": "creator", "id": str(int(entity_id)), "thumb": "1"}
+    version = contract.entity_image_version("creator", entity_id)
+    if version:
+        params["v"] = version
+    return "/entity-image?" + urllib.parse.urlencode(params)
+
+
+def _author_avatar_tiers(contract, rows) -> tuple[str, str]:
+    """一位创作者（同一作者键下的几条来源）的圆框地址与回落地址。
+
+    次序与关注页作者行那份完全一样：实体图 → 社媒官方头像 → 归档站镜像。同一个人有多条
+    来源时按来源顺序取第一条给得出的，去重后最多两档——`data-fallbacks` 只接一条，第三档
+    留着也用不上。两档都没有就是空串，页面退回首字母。
+    """
+    tiers: list[str] = []
+    for row in rows:
+        for url in (_entity_avatar_url(contract, row), official_avatar_url(row),
+                    _avatar_url(row["provider"], row["ref"])):
+            if url and url not in tiers:
+                tiers.append(url)
+    return (tiers[0] if tiers else ""), (tiers[1] if len(tiers) > 1 else "")
+
+
+def _source_payload(contract, row, aliases: dict[str, str] | None = None) -> dict:
     history_exhausted = _legacy_history_end(row)
     return {
         "id": row["id"],
@@ -1257,6 +1294,10 @@ def _source_payload(row, aliases: dict[str, str] | None = None) -> dict:
         # 而怎么推是站点知识，页面自己再推一遍迟早和这里漂移。
         "author_name": author_display_name(row),
         "author_key": author_key(row, aliases),
+        # 三档头像，页面按同一次序取：实体图 → 社媒官方头像 → 归档站镜像 → 首字母。
+        # 拆成三个字段而不是服务端先挑一个，是因为回落要在浏览器里发生（`data-fallbacks`），
+        # 服务端挑完就只剩一条地址，取不到时页面连替身都没有。
+        "entity_avatar_url": _entity_avatar_url(contract, row),
         "official_avatar_url": official_avatar_url(row),
         "avatar_url": _avatar_url(row["provider"], row["ref"]),
         "url": row["url"],
@@ -1436,7 +1477,7 @@ def q_follow_authors(contract, args) -> dict:
     每一格上那个数跟关注页的读数同一个口径——数的是条目，不是折叠后的发布组。点开一位
     作者去关注页，那里写着「1,294 项更新」，名册上就得是同一个 1,294；两处各按各的口径
     数，用户看到的是两个都对、却对不上的数字。
-    头像给的是来源那两条地址，官方优先、归档兜底，跟关注页作者行完全一样。
+    头像与关注页作者行同一份判定（`_author_avatar_tiers`）：实体图、官方头像、归档镜像依次取。
     """
     query = str(args.get("q") or "").strip().casefold()
     try:
@@ -1469,18 +1510,10 @@ def q_follow_authors(contract, args) -> dict:
             if not key or key not in counts:
                 continue
             entry = grouped.setdefault(key, {"k": "", "key": key, "n": counts[key],
-                                             "entity_id": None, "avatar": "",
-                                             "avatar_fallback": "", "providers": [],
-                                             "_rows": []})
+                                             "entity_id": None, "providers": [], "_rows": []})
             entry["_rows"].append(row)
             if row["entity_id"]:
                 entry["entity_id"] = int(row["entity_id"])
-            official = official_avatar_url(row)
-            mirror = _avatar_url(row["provider"], row["ref"])
-            if official and not entry["avatar"]:
-                entry["avatar"] = official
-            if mirror and not entry["avatar_fallback"]:
-                entry["avatar_fallback"] = mirror
             provider = str(row["provider"] or "")
             if provider and provider not in entry["providers"]:
                 entry["providers"].append(provider)
@@ -1493,11 +1526,8 @@ def q_follow_authors(contract, args) -> dict:
         rows = []
         for key, entry in grouped.items():
             entry["held_by"] = held_names.get(held.get(key, 0), "")
+            entry["avatar"], entry["avatar_fallback"] = _author_avatar_tiers(contract, entry["_rows"])
             entry["k"] = author_name(entry.pop("_rows"), key, canonical)
-            if entry["avatar_fallback"] == entry["avatar"]:
-                entry["avatar_fallback"] = ""
-            if not entry["avatar"]:
-                entry["avatar"], entry["avatar_fallback"] = entry["avatar_fallback"], ""
             rows.append(entry)
         rows.sort(key=lambda row: (-row["n"], row["k"].casefold()))
         rows = [row for row in rows if not query or query in row["k"].casefold()]
@@ -1787,7 +1817,7 @@ def q_follow(contract, args) -> dict:
         store = _store(contract, connection)
         source_rows = store.sources()
         alias_map, author_aliases = store.author_aliases()
-        sources = [_source_payload(row, alias_map) for row in source_rows]
+        sources = [_source_payload(contract, row, alias_map) for row in source_rows]
         alias_suggestions = _follow_alias_suggestions(source_rows, alias_map)
         enabled_source_ids = {int(row["id"]) for row in source_rows if row["enabled"]}
         # 作者、来源和标签都不是库里的列：author_key 要经实体绑定、来源 metadata 和
@@ -2541,7 +2571,7 @@ def w_follow_resolve(contract, body, *, progress=None, checkpoint=None, resume_s
         raise ValueError(f"一次最多解析 {MAX_RESOLVE_LINES} 行，收到 {len(lines)} 行")
 
     known = {(row["provider"], canonical_source_ref(row["provider"], row["ref"])) for row in
-             (_source_payload(r) for r in _existing_sources(contract))}
+             (_source_payload(contract, r) for r in _existing_sources(contract))}
 
     # 进度按来源计，不按行计：一行检索词背后是十几个来源各查各的，
     # 行数当分母只会整轮卡在 0% 然后跳满。计划先算一遍（不联网），
