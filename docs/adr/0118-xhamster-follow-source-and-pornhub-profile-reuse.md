@@ -8,8 +8,9 @@
 ## 背景
 
 追更要能跟一位演员在哪个站更新就在哪个站跟。这位演员在 `zh.xhamster.com` 有创作者页
-（`/creators/<slug>-<数字 id>/newest`），作品列表、日期、时长、封面都在这一页上；但创作者页
-上没有人像，也没有一份能当资料用的简介表——她的头像与资料表在 Pornhub 的人物页上。
+（`/creators/<slug>-<数字 id>/full-length/newest`），作品列表、发布时间、时长、封面都在这一页
+上；但创作者页上没有人像，也没有一份能当资料用的简介表——她的头像与资料表在 Pornhub 的人物
+页上。
 
 两个站对同一个人用同一个名字（`shinaryen`），而 Pornhub 没有任何可用的检索接口：`/api/v1/
 search/suggest`、`/pornstars/search` 全是 404，`/pornstars?search=` 直接无视参数列无关模特
@@ -18,16 +19,23 @@ search/suggest`、`/pornstars/search` 全是 404，`/pornstars?search=` 直接�
 ## 决策
 
 **一、`xhamster` 是一条正常的追更来源。** 登记在 `follow_providers.PROVIDERS`
-（`semantics="work"`、`backfill=True`、优先级 56），连接器只做列表：作品身份是站内数字
-`data-video-id`，标题取 `title`／`aria-label`，封面取 `srcset` 的卡片尺寸那一档，时长与日期
-从卡上读。
+（`semantics="work"`、`backfill=True`、优先级 56），连接器只做列表。
 
-**日期是一天的粒度。** 站点一天只在第一条上印 `24 October 2026`，后面的卡沿用那一天；落库标
-`approximate`，不当成站点给出的精确发布时间。作品页里其实有精确到秒的 `created`，但那是详情
-页才有的东西，为它多打一次请求不值。
+**抓「全长」那一栏。** 地址是 `…/full-length/newest`：她的更新页 `/newest` 不分长短，一页里
+混着竖屏短视频（2026-10-24 实测那一页 46 条时长 64–1348 秒），全长栏是站点自己按「有完整正片」
+筛过的一份（同一天 5 页 205 条，610–2650 秒）。长短与画幅交给站点那一栏判，不自己按时长或
+画幅猜；粘 `/newest` 的地址也收，登记时归一到全长栏。
 
-**分页只有一种写法。** 页码写在路径上（`/newest`、`/newest/2`……），`?page=2` 被站点忽略、
-回的仍是第一页；翻过最后一页回 404，所以 `HISTORY_END_STATUSES = (404,)`。
+**列表读页面内嵌的那份 JSON。** 作品在 `window.initials` 的 `trendingVideoSectionComponent.
+videoListProps.videoThumbProps` 里：一条一个对象，带站内 `id`、`duration`（秒）、`created`
+（epoch 秒）、`title`、`pageURL` 与 `thumbURL`。不读 DOM 卡片——卡片只把首屏那 9 张的时长与
+封面渲染进 HTML，其余 37 张是懒加载占位，照 DOM 取会丢掉三十几条的这两样（2026-10-24 实测
+46 张里只有 9 张带）。`created` 精确到秒，所以发布时间按精确值落库，不再标近似。
+
+**分页只有一种写法。** 页码写在路径上（`…/full-length/newest`、`…/full-length/newest/2`……），
+`?page=2` 被站点忽略、回的仍是第一页；翻过最后一页回 404，所以 `HISTORY_END_STATUSES = (404,)`。
+一页拿不到那份清单不算「没有更多历史」：这条出口上偶尔回的是地域拦截页（状态 200、几百字节），
+重取一次，仍然没有就报取不到——把拦截读成尽头会让一轮回填提前收工。
 
 **二、人像与资料不从这一站取。** 创作者页不给这两样，连接器也不去猜：`creator_profile_followup`
 把 `LOOKUP_PROVIDERS = ("xhamster",)` 这几种来源的创作者按名字去 Pornhub 找一条同名人物页，
@@ -62,12 +70,13 @@ search/suggest`、`/pornstars/search` 全是 404，`/pornstars?search=` 直接�
 
 ## 验收
 
-- 订阅 `https://zh.xhamster.com/creators/shinaryen-89795/newest` 后，首次检查抓到 46 条作品，
-  每条有标题、封面、时长与日期（同日沿用）。
+- 订阅 `https://zh.xhamster.com/creators/shinaryen-89795/full-length/newest` 后，首次检查抓到
+  46 条作品，每条有标题、封面、时长与精确到秒的发布时间；「抓更早的一页」逐页往回走到
+  第 5 页，第 6 页回 404 记作尽头，合计 205 条。
 - 这位创作者的头像与资料表来自 `cn.pornhub.com/model/shinaryen`，档案上留下
   `provider=pornhub` 的人物页编号。
 - 播放解析给出母清单里的全部档位（含 1080p 与 4K），播放器按清单类型挂 HLS。
-- `tests/test_follow_xhamster.py` 钉住列表选择器、日期沿用、分页写法、尽头 404、母清单解析、
-  换签回退与主机白名单；`tests/test_pornhub_profiles.py` 与
-  `tests/test_creator_profile_followup.py` 钉住「一条同名才接上」「两条同名什么都不写」
-  「已记在别的档案上不借」。
+- `tests/test_follow_xhamster.py` 钉住栏位地址与归一、页面 JSON 的读法（含花括号出现在标题里）、
+  分页写法、尽头 404、拦截页重取一次、母清单解析、换签回退与主机白名单；`tests/test_pornhub_
+  profiles.py` 与 `tests/test_creator_profile_followup.py` 钉住「一条同名才接上」「两条同名什么
+  都不写」「已记在别的档案上不借」。

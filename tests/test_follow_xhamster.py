@@ -1,20 +1,21 @@
 """xHamster 创作者页连接器与播放解析的隔离测试。
 
-夹具的字段名与 DOM 结构取自 2026-10-24 对 `zh.xhamster.com/creators/shinaryen-89795/newest`
-的实测响应：她的作品在那个带名字的 `div.thumb-list` 里（`data-video-id` 是作品身份，
-`data-video-type="video"`；同一页的「动态」是 `moment`，推广位与推荐小列表也带
-`data-video-id`），日期只在当天第一条上印一次（`24 October 2026`），分页写在
-`/newest/<页码>` 这一段路径上，翻过最后一页回 404。作品页把播放器的 HLS 母清单地址写在
-`<link rel="preload">` 上（`_TPL_` 是档位占位符），母清单一档一行，`RESOLUTION=` 之后
-跟着子清单地址。测试本身不联网：transport 全部注入。
+夹具的字段名取自 2026-10-24 对 `zh.xhamster.com/creators/shinaryen-89795/full-length/newest`
+的实测响应：作品清单在页面内嵌的 `window.initials` 里（`trendingVideoSectionComponent.
+videoListProps.videoThumbProps`，每项带 `id`、`duration`（秒）、`created`（epoch 秒）、
+`title`、`pageURL`、`thumbURL`），分页写在 `/full-length/newest/<页码>` 这一段路径上，
+翻过最后一页回 404。作品页把播放器的 HLS 母清单地址写在 `<link rel="preload">` 上
+（`_TPL_` 是档位占位符），母清单一档一行，`RESOLUTION=` 之后跟着子清单地址。
+测试本身不联网：transport 全部注入。
 """
+import json
 import unittest
 from types import SimpleNamespace
 
 from peach import follow_assets, follow_providers, follow_secrets
 from peach.follow import FollowHistoryEnd
 from peach.follow_sources import (
-    FollowSourceError, build_connector, parse_source_url,
+    FollowSourceError, build_connector, parse_source_url, xhamster_listing,
 )
 from peach.follow_stream import (
     FollowMediaResolver, FollowMediaUnavailable, media_type, resolvable_at_play,
@@ -22,12 +23,17 @@ from peach.follow_stream import (
 )
 from peach.http import HttpResponse
 
-CREATOR = "https://zh.xhamster.com/creators/shinaryen-89795/newest"
+CREATOR = "https://zh.xhamster.com/creators/shinaryen-89795/full-length/newest"
 WATCH_URL = "https://zh.xhamster.com/videos/step-mom-xhXhBHx"
 #: 母清单的签名地址：`KEY,exp` 前缀、`multi=` 里列着这一条有哪些分辨率、`_TPL_` 占位档位。
 FRONT = ("https://video-nss.xhcdn.com/E58FK8v1UvWDYvOG-grtNw==,1792854000/media=hls4/"
          "multi=256x144:144p:,426x240:240p:,854x480:480p:,1280x720:720p:,1920x1080:1080p:,"
          "3840x2160:2160p:/031/247/098")
+
+#: 实测第一条作品的发布时间（`created`）与它对应的 UTC 时刻。
+CREATED = 1792430526
+CREATED_ISO = "2026-10-19T17:22:06Z"
+THUMB = "https://ic-vt-nss.xhcdn.com/a/hash/s(w:526,h:298),webp/031/339/968/v2/526x298.206.webp"
 
 def _master(codec: str = "h264") -> bytes:
     """母清单：一档两行，`RESOLUTION=` 那行给分辨率，下一行是子清单的相对地址。"""
@@ -58,44 +64,38 @@ def _transport(status=200, body=b"", headers=None, record=None):
     return call
 
 
-def _card(video_id: str, title: str, *, slug: str = "a-video", kind: str = "video",
-          duration: str = "03:44", added: str | None = "24 October 2026",
-          thumb: str = "https://ic-vt-nss.xhcdn.com/a/hash/s(w:526,h:298),webp/v2/526x298.webp") -> str:
-    date = (f'<div class="body-bold primary dateAdded video-thumb__date-added">{added}</div>'
-            if added else "")
-    return (
-        '<div class="container thumb-list__item video-thumb video-thumb--type-video"'
-        f' data-video-id="{video_id}" data-video-type="{kind}">'
-        f"{date}"
-        f'<a class="video-thumb__image-container" data-role="thumb-link"'
-        f' href="https://zh.xhamster.com/videos/{slug}"'
-        f' aria-label="{title}">'
-        f'<img data-role="thumb-preview-img" src="https://ic-vt-nss.xhcdn.com/a/big/v2/2560x1440.webp"'
-        f' srcset="{thumb} 1x, https://ic-vt-nss.xhcdn.com/a/hash/s(w:1280,h:720)/v2/1280x720.webp 2x"/>'
-        "</a>"
-        f'<div data-role="video-duration">{duration}</div>'
-        "</div>"
-    )
+def _item(video_id: int, title: str, *, slug: str = "a-video", duration: int = 881,
+          created: int = CREATED, kind: str = "video", thumb: str = THUMB) -> dict:
+    """页面 JSON 里的一条作品。字段名与实测一致。"""
+    return {"id": video_id, "duration": duration, "created": created, "title": title,
+            "videoType": kind, "pageURL": f"https://zh.xhamster.com/videos/{slug}",
+            "thumbURL": thumb, "views": 7836, "isUHD": True,
+            "landing": {"type": "person", "id": 89795}}
 
 
-def _page(cards: list[str], *, name: str = "shinaryen") -> bytes:
-    return (
-        "<html><head><title>Shinaryen</title></head><body>"
-        '<div class="promo"><div data-video-id="1" data-video-type="video">推广位</div></div>'
-        f'<div class="thumb-list" data-ecommerce-list-name="{name}">' + "".join(cards) + "</div>"
-        '<div class="thumb-list" data-ecommerce-list-name="recommended">'
-        '<div data-video-id="999" data-video-type="video">别人的作品</div>'
-        "</div></body></html>"
-    ).encode("utf-8")
+#: 地域拦截页：状态 200、四百来字节，页面里没有 `window.initials`。
+_BLOCKED = "<html><body>법적 사유로 이용 불가</body></html>".encode("utf-8")
 
 
+def _page(items: list[dict] | None = None) -> bytes:
+    """创作者页：作品清单在 `window.initials` 里，动态另成一栏。"""
+    payload: dict = {"channelInfo": {"id": 89795, "type": "pornstar",
+                                     "slug": "shinaryen-89795", "personType": "creator"},
+                     "momentsListComponent": {"videoThumbProps": [_item(900001, "一条动态", kind="moment")]}}
+    if items is not None:
+        payload["trendingVideoSectionComponent"] = {
+            "videoListProps": {"videoThumbProps": items}}
+    return ("<html><head><title>Shinaryen</title></head><body>"
+            "<script id='initials-script'>window.initials="
+            + json.dumps(payload, ensure_ascii=False) + ";</script></body></html>").encode("utf-8")
 
 
 class AddressTests(unittest.TestCase):
-    def test_the_creator_page_is_the_source(self):
+    def test_the_full_length_tab_is_the_source(self):
         for url in (CREATOR,
                     "https://zh.xhamster.com/creators/shinaryen-89795",
-                    "https://www.xhamster.com/creators/shinaryen-89795/newest/3",
+                    "https://www.xhamster.com/creators/shinaryen-89795/full-length/newest/3",
+                    "https://zh.xhamster.com/creators/shinaryen-89795/newest",
                     "xhamster.com/creators/shinaryen-89795/newest?page=4"):
             with self.subTest(url=url):
                 parsed = parse_source_url(url)
@@ -105,7 +105,7 @@ class AddressTests(unittest.TestCase):
                 self.assertEqual(parsed.label, "shinaryen")
 
     def test_another_tab_of_the_same_page_is_refused(self):
-        """`/exclusive` 之类是站点另外排的清单，不是她按时间的新作。"""
+        """`/exclusive` 之类是站点另外排的清单，不是她的正片。"""
         for url in ("https://zh.xhamster.com/creators/shinaryen-89795/exclusive",
                     "https://zh.xhamster.com/videos/step-mom-xhXhBHx",
                     "https://zh.xhamster.com/creators/shinaryen",
@@ -129,6 +129,8 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(spec.semantics, "work")
         self.assertTrue(spec.backfill)
         self.assertEqual(spec.url_hosts, ("xhamster.com",))
+        self.assertEqual(spec.source_url,
+                         "https://zh.xhamster.com/creators/{ref}/full-length/newest")
         # 正片那一跳 302 到 `ip*.ahcdn.com`：少了它，媒体代理整站取不到文件。
         self.assertEqual(set(spec.hosts), {"xhcdn.com", "ahcdn.com"})
 
@@ -138,80 +140,103 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(follow_secrets.CREDENTIAL_GUIDE["xhamster"], {"requirement": "none"})
 
 
+class ListingTests(unittest.TestCase):
+    def test_the_listing_is_read_from_the_page_json(self):
+        listing = xhamster_listing(_page([_item(31339968, "出差")]).decode("utf-8"))
+        self.assertEqual([row["id"] for row in listing], [31339968])
+
+    def test_a_page_without_the_page_json_gives_nothing(self):
+        for html in ("", "<html></html>", "window.initials={\"momentsListComponent\":{}}"):
+            with self.subTest(html=html):
+                self.assertIsNone(xhamster_listing(html))
+
+    def test_a_brace_inside_a_title_does_not_end_the_payload(self):
+        """标题里有花括号：配对必须认字符串边界，否则整个页面 JSON 都解析不出来。"""
+        html = _page([_item(31339968, "继母说「没有渗透」，但仍然帮我射精}")]).decode("utf-8")
+        self.assertEqual([row["id"] for row in xhamster_listing(html)], [31339968])
+
+
 class FetchTests(unittest.TestCase):
-    def fetch(self, body: bytes, *, page: int = 0, status: int = 200) -> tuple:
+    def fetch(self, body: bytes | list[bytes], *, page: int = 0, status: int = 200) -> tuple:
         seen = []
-        conn = build_connector("xhamster", transport=_transport(status, body, record=seen),
-                               max_items=100)
+        pages = list(body) if isinstance(body, list) else [body]
+        def transport(request, timeout, max_bytes):
+            seen.append(request)
+            return HttpResponse(status, {}, pages.pop(0) if len(pages) > 1 else pages[0])
+        # 拦截页的重试之间会等一下换出口；测试里不真等。
+        conn = build_connector("xhamster", transport=transport, max_items=100,
+                               sleeper=lambda _delay: None)
         return conn.fetch("shinaryen-89795", page=page), seen
 
-    def test_a_card_carries_the_identity_title_cover_duration_and_day(self):
-        body = _page([_card("31389143", "继母教继子如何做爱并中出")])
-        fetch, _seen = self.fetch(body)
+    def test_a_list_item_carries_identity_title_cover_duration_and_time(self):
+        fetch, _seen = self.fetch(_page([_item(31339968, "出差时被同事发现我在打飞机")]))
         candidate = fetch.candidates[0]
         self.assertEqual(fetch.provider, "xhamster")
         self.assertEqual(fetch.ref, "shinaryen-89795")
         self.assertEqual(fetch.request_url, CREATOR)
-        self.assertEqual(candidate.external_id, "31389143")
-        self.assertEqual(candidate.title, "继母教继子如何做爱并中出")
+        self.assertEqual(candidate.external_id, "31339968")
+        self.assertEqual(candidate.title, "出差时被同事发现我在打飞机")
         self.assertEqual(candidate.url, "https://zh.xhamster.com/videos/a-video")
-        self.assertEqual(candidate.duration, 224.0)
-        self.assertEqual(candidate.published_at, "2026-10-24T00:00:00+00:00")
-        self.assertEqual(candidate.extra["published_precision"], "approximate")
-        # 卡片尺寸那一档就够：`src` 是 2560×1440 的原图，一页几十张。
-        self.assertEqual(candidate.thumb_url, "https://ic-vt-nss.xhcdn.com/a/hash/s(w:526,h:298),webp/v2/526x298.webp")
+        self.assertEqual(candidate.duration, 881.0)
+        self.assertEqual(candidate.published_at, CREATED_ISO)
+        self.assertEqual(candidate.extra["published_precision"], "exact")
+        # 卡片尺寸那一档就够：整页几十张，原图那个尺寸是浪费。
+        self.assertEqual(candidate.thumb_url, THUMB)
 
-    def test_only_her_own_list_is_read(self):
-        """推广位、`moments` 与「推荐」小列表也带 `data-video-id`，都不是她的新作。"""
-        body = _page([
-            _card("31389143", "第一条"),
-            _card("31374522", "一条动态", kind="moment", slug="moment/xh1"),
-            _card("31370199", "第二条"),
-        ])
-        fetch, _seen = self.fetch(body)
+    def test_a_moment_in_the_list_is_not_a_work(self):
+        fetch, _seen = self.fetch(_page([
+            _item(31339968, "第一条"),
+            _item(31339969, "一条动态", kind="moment", slug="moments/xh1"),
+            _item(31339970, "第二条"),
+        ]))
         self.assertEqual([item.external_id for item in fetch.candidates],
-                         ["31389143", "31370199"])
-
-    def test_a_day_is_printed_once_and_carries_down_the_list(self):
-        # 2026-10-24 实测：一天只在第一条上印日期，沿用与作品页里的 `created` 对得上。
-        body = _page([
-            _card("31389143", "第一条", added="22 October 2026"),
-            _card("31374522", "第二条", added=None),
-            _card("31370199", "第三条", added=None),
-            _card("31356749", "第四条", added="21 October 2026"),
-        ])
-        fetch, _seen = self.fetch(body)
-        self.assertEqual([item.published_at for item in fetch.candidates],
-                         ["2026-10-22T00:00:00+00:00"] * 3 + ["2026-10-21T00:00:00+00:00"])
-
-    def test_a_card_without_a_readable_day_keeps_the_unknown_mark(self):
-        body = _page([_card("31389143", "第一条", added="上周")])
-        fetch, _seen = self.fetch(body)
-        self.assertIsNone(fetch.candidates[0].published_at)
-        self.assertEqual(fetch.candidates[0].extra["published_precision"], "unknown")
+                         ["31339968", "31339970"])
 
     def test_the_second_page_is_a_path_segment(self):
-        """`?page=2` 被站点忽略、回的还是第一页那 46 条；只有 `/newest/2` 换页。"""
-        _fetch, seen = self.fetch(_page([_card("31389143", "第一条")]), page=1)
+        """`?page=2` 被站点忽略、回的还是第一页那 46 条；只有 `/full-length/newest/2` 换页。"""
+        _fetch, seen = self.fetch(_page([_item(31339968, "第一条")]), page=1)
         self.assertEqual([request.url for request in seen], [f"{CREATOR}/2"])
         self.assertEqual(seen[0].headers.get("Accept-Language"), "zh-CN,zh;q=0.8")
 
     def test_the_page_after_the_last_one_is_the_end_of_the_history(self):
         conn = build_connector("xhamster", transport=_transport(404, b"<html>404</html>"))
         with self.assertRaises(FollowHistoryEnd):
-            conn.fetch("shinaryen-89795", page=11)
+            conn.fetch("shinaryen-89795", page=5)
 
-    def test_a_list_that_parses_to_nothing_is_an_error_not_an_empty_page(self):
-        """第一页解析不出作品是页面变了，不是这位没有作品。"""
-        conn = build_connector("xhamster", transport=_transport(200, b"<html></html>"))
+    def test_an_interception_page_is_fetched_again(self):
+        """这条出口上偶尔回的是地域拦截页：状态 200、四百来字节、页面里没有这份清单。"""
+        fetch, seen = self.fetch([_BLOCKED, _page([_item(31339968, "第一条")])])
+        self.assertEqual([item.external_id for item in fetch.candidates], ["31339968"])
+        self.assertEqual(len(seen), 2)
+        # 拦截页会把条件请求那两样带歪，重取时不带。
+        self.assertNotIn("If-None-Match", seen[1].headers)
+
+    def test_two_interceptions_in_a_row_are_still_retried(self):
+        """同一批抽样里八次有五次被拦：只重取一次不够。"""
+        fetch, seen = self.fetch([_BLOCKED, _BLOCKED, _page([_item(31339968, "第一条")])])
+        self.assertEqual([item.external_id for item in fetch.candidates], ["31339968"])
+        self.assertEqual(len(seen), 3)
+
+    def test_a_page_still_without_the_listing_is_an_error(self):
+        """重取到头还是拦：说没取到，别说这位没有作品。"""
+        conn = build_connector("xhamster", transport=_transport(200, b"<html></html>"),
+                               sleeper=lambda _delay: None)
         with self.assertRaises(FollowSourceError):
             conn.fetch("shinaryen-89795")
 
+    def test_a_later_page_without_the_listing_is_not_the_end_of_history(self):
+        """尽头是 404；一页拦截不能被读成「没有更多历史」，那会把回填当完成。"""
+        conn = build_connector("xhamster", transport=_transport(200, b"<html></html>"),
+                               sleeper=lambda _delay: None)
+        with self.assertRaises(FollowSourceError):
+            conn.fetch("shinaryen-89795", page=3)
+
     def test_the_creator_page_itself_carries_no_avatar_or_bio(self):
         """人像与简介来自 pornhub 的同一位（`creator_profile_followup`），这里不猜。"""
-        candidate = self.fetch(_page([_card("31389143", "第一条")]))[0].candidates[0]
+        candidate = self.fetch(_page([_item(31339968, "第一条")]))[0].candidates[0]
         self.assertNotIn("author", candidate.extra)
         self.assertIsNone(candidate.summary)
+        self.assertIsNone(candidate.author)
 
 
 class PlaylistTests(unittest.TestCase):

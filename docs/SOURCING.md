@@ -804,15 +804,19 @@ Instagram 的独立用户登录会话未取得，自动适配器不进正式依�
 
 ### xHamster 的创作者页
 
-`https://zh.xhamster.com/creators/<slug>-<站内 id>/newest`（ADR-0118）：
+`https://zh.xhamster.com/creators/<slug>-<站内 id>/full-length/newest`（ADR-0118）：
 
-- 作品列表在那个带名字的容器里（`div.thumb-list[data-ecommerce-list-name="newest"]`），
-  一条一个 `data-video-id`；页面别处的推广位、「推荐」小列表与她的 `moments`
-  （`data-video-type="moment"`）也带这个属性，都不算她的新作。
-- **一天只印一次日期**（`24 October 2026`，中文站也照英文月份印），后面的卡沿用那一天；
-  落库标近似。作品页里有精确到秒的 `created`，但那是详情页才有的东西。
-- **页码只写在路径上**：`/newest`、`/newest/2`……；`?page=2` 被忽略、回的仍是第一页。翻过
-  最后一页回 404（`HISTORY_END_STATUSES`）。
+- 抓的是**「全长」那一栏**。她的更新页 `/newest` 不分长短，混着竖屏短视频（那一页 46 条时长
+  64–1348 秒）；全长栏是站点自己按「有完整正片」筛过的一份（5 页 205 条，610–2650 秒）。
+  粘 `/newest` 的地址也收，登记时归一到全长栏，界面上的链接与实际抓的是同一页。
+- 作品清单读页面内嵌的 `window.initials`（`trendingVideoSectionComponent.videoListProps.
+  videoThumbProps`）：一条一个对象，带站内 `id`、`duration`（秒）、`created`（epoch 秒）、
+  `title`、`pageURL` 与 `thumbURL`。**不读 DOM 卡片**：卡片只把首屏那 9 张的时长与封面渲染进
+  HTML，其余 37 张是懒加载占位，照 DOM 取会丢掉三十几条的这两样。她的 `moments` 是另一栏
+  （`videoType="moment"`），不算作品。
+- **页码只写在路径上**：`…/full-length/newest`、`…/full-length/newest/2`……；`?page=2` 被
+  忽略、回的仍是第一页。翻过最后一页回 404（`HISTORY_END_STATUSES`）。一页没有清单不是
+  「没有更多历史」：那多半是拦截页，重取一次，仍然没有就报取不到。
 - 正片在作品页按下播放时才解析，取的是页头 `<link rel="preload">` 上那条 HLS 母清单
   （`media=hls4/multi=…/_TPL_.<codec>.mp4.m3u8`，`_TPL_` 是档位占位符）：它列着这一条的每一
   档，含 1080p 与 4K，子清单是分片 MP4（av1）或 TS（h264）。取的时候 302 到
