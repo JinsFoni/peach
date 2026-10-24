@@ -111,7 +111,7 @@ function watchReports() {
 
 function filterProps(): CatalogFilterProps {
   return {
-    tiers: { key: 'k', performers: [], studios: [] }, empty: true, tags: [], tagFirst: 0,
+    tiers: { key: 'k', performers: [], studios: [], following: [] }, empty: true, tags: [], tagFirst: 0,
     views: [{ k: '', label: '全部', href: '/' }], state: '', count: { total: 0, shown: 0 }, trash: false,
     sorts: [], layout: null, refreshing: false, offscreen: false, combo: [], comboHidden: true, comboHost: null,
     actions: {

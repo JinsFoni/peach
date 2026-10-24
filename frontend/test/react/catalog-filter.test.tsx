@@ -1,15 +1,17 @@
-/* 首页筛选条岛：空馆藏与首屏等待时两排、标签条摆什么。
+/* 首页筛选条岛：空馆藏与首屏等待时三排、标签条摆什么，以及关注那一排摆的是谁、点开去哪儿。
  *
  * 点选、续页、排序、版式与详情往返要真的取数和量布局，由 `frontend/e2e/catalog-filter.test.ts` 在真浏览器里走。 */
 import { describe, expect, it, vi } from 'vitest';
 
 import { CatalogFilterPage } from '../../src/react/catalog-filter/catalog-filter-page';
-import { EMPTY_SLOTS, type CatalogFilterProps, type TierPerformer } from '../../src/react/catalog-filter/catalog-filter';
+import {
+  EMPTY_SLOTS, type CatalogFilterProps, type TierFollowing, type TierPerformer,
+} from '../../src/react/catalog-filter/catalog-filter';
 import { mount, mountRoot, pending, settle } from './render';
 
 function props(patch: Partial<CatalogFilterProps> = {}): CatalogFilterProps {
   return {
-    tiers: { key: 'k', performers: [], studios: [] }, empty: false, tags: [], tagFirst: 0,
+    tiers: { key: 'k', performers: [], studios: [], following: [] }, empty: false, tags: [], tagFirst: 0,
     views: [{ k: '', label: '全部', href: '/' }], state: '', count: { total: 0, shown: 0 }, trash: false,
     sorts: [], layout: null, refreshing: false, offscreen: false, combo: [], comboHidden: true, comboHost: null,
     actions: {
@@ -44,8 +46,43 @@ describe('空馆藏', () => {
   });
 });
 
-describe('读数', () => {
-  it('取数期间是一条微光；这一趟失败时收起，不留着一直转的微光', async () => {
+describe('关注那一排', () => {
+  const authors: TierFollowing[] = [
+    { key: 'entity:9', name: '有主页的那位', initial: '有', avatar: '/entity-image?kind=creator&id=9&thumb=1&v=abc',
+      fallback: '', href: '/creators/9' },
+    { key: 'name:还没绑定的那位', name: '还没绑定的那位', initial: '还', avatar: '', fallback: '',
+      href: `/follow?author=${encodeURIComponent('name:还没绑定的那位')}` },
+  ];
+
+  it('摆在三排的末尾，一枚是去她那页的链接，头像底下垫着首字母', async () => {
+    const host = await mount(<CatalogFilterPage {...props({ tiers: {
+      key: 'k', performers: [{ name: '某人', ringHtml: '' }], studios: [], following: authors,
+    } })} />);
+    const rows = [...host.querySelectorAll('[data-catalog-tier]')].map((row) => row.getAttribute('data-catalog-tier'));
+    expect(rows).toEqual(['performers', 'following']);
+    expect(host.querySelector('[data-tier-caption]')?.textContent).toBe('关注');
+    const links = [...host.querySelectorAll('[data-tier-following]')];
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['/creators/9', authors[1]!.href]);
+    expect(links.map((link) => link.getAttribute('aria-label'))).toEqual(['关注：有主页的那位', '关注：还没绑定的那位']);
+    // 名字那一格说这是谁；圆框只是装饰，取不到图时由全站那条回落把它摘掉，首字母露出来。
+    expect(links[0]!.querySelector('[data-tier-name]')?.textContent).toBe('有主页的那位');
+    expect(links[0]!.querySelector('[data-tier-ring]')?.getAttribute('aria-hidden')).toBe('true');
+    expect(links[0]!.querySelector('img')?.getAttribute('src')).toBe(authors[0]!.avatar);
+    expect(links[0]!.querySelector('img')?.getAttribute('data-drop')).toBe('self');
+    expect(links[0]!.querySelector('[data-tier-initial]')?.textContent).toBe('有');
+    expect(links[1]!.querySelector('img')).toBeNull();
+    expect(links[1]!.querySelector('[data-tier-initial]')?.textContent).toBe('还');
+  });
+
+  it('没人被关注时这一排不画，三排容器也不为它留空', async () => {
+    const host = await mount(<CatalogFilterPage {...props()} />);
+    expect(host.querySelector('[data-catalog-tier="following"]')).toBeNull();
+    expect(host.querySelector('[data-tier-caption]')).toBeNull();
+    expect(host.querySelector('[data-catalog-tiers]')?.hasAttribute('hidden')).toBe(true);
+  });
+});
+
+describe('读数', () => {  it('取数期间是一条微光；这一趟失败时收起，不留着一直转的微光', async () => {
     const waiting = await mount(<CatalogFilterPage {...props({ count: null })} />);
     expect(count(waiting, '[data-skeleton="count"]')).toBe(1);
     document.body.innerHTML = '';
@@ -66,7 +103,8 @@ describe('续页', () => {
       .mockReturnValueOnce(stale.answer)
       .mockResolvedValueOnce([{ name: '新二', ringHtml: '' }])
       .mockResolvedValue([]);
-    const tiers = (key: string, name: string) => ({ key, performers: [{ name, ringHtml: '' }], studios: [] });
+    const tiers = (key: string, name: string) =>
+      ({ key, performers: [{ name, ringHtml: '' }], studios: [], following: [] });
     const base = props();
     const page = (key: string, name: string) =>
       <CatalogFilterPage {...base} tiers={tiers(key, name)} actions={{ ...base.actions, moreTops }} />;
