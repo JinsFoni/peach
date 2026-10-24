@@ -110,12 +110,19 @@ class PageTests(unittest.TestCase):
         """页面用语与顺序照站上，身高三围折进资料卡「身材」那一格，不再列一遍。"""
         parsed = profiles.parse(page())
         self.assertEqual(labels(parsed), [
-            "感情", "取向", "性别", "出生地", "体重", "种族", "发色", "胸部", "纹身", "穿环",
-            "兴趣", "勾起性欲", "浇灭性欲"])
+            "感情", "取向", "性别", "出生地", "体重", "种族", "发色", "胸部", "纹身", "穿环", "兴趣"])
         self.assertEqual(shown(parsed, "感情"), "单身")
         self.assertEqual(shown(parsed, "出生地"), "Czech Republic")
         self.assertEqual(shown(parsed, "体重"), "50 kg")
         self.assertEqual(parsed["about"][0], {"label": "感情", "value": "单身", "glyph": "heart"})
+
+    def test_the_two_self_descriptions_the_site_asks_stay_off_the_table(self):
+        """「会勾起／浇灭我性欲的是」两格答的是一句话，不是读数：站上原文照收进 `fields`，表里不列。"""
+        parsed = profiles.parse(page())
+        self.assertEqual(parsed["fields"]["会勾起我性欲的是"], "When you watching me, fucking love it!")
+        self.assertEqual(parsed["fields"]["会浇灭我性欲的是"], "Dunno what can turn me off.")
+        self.assertEqual([label for label in labels(parsed)
+                          if label in ("勾起性欲", "浇灭性欲", "会勾起我性欲的是", "会浇灭我性欲的是")], [])
 
     def test_yes_and_no_become_the_wording_the_page_uses(self):
         parsed = profiles.parse(page())
