@@ -52,6 +52,7 @@ SOURCE_ICON_URLS: dict[str, str] = {
     "rule34xxx": "https://rule34.xxx/favicon.ico",
     "rule34paheal": "https://rule34.paheal.net/favicon.ico",
     "pornhub": "https://cn.pornhub.com/favicon.ico",
+    "xhamster": "https://zh.xhamster.com/favicon.ico",
     "gofile": "https://gofile.io/favicon.ico",
     "f95zone": "https://f95zone.to/assets/favicon-32x32.png",
     "simpcity": "https://simpcity.cr/data/assets/logo/favicon.png",

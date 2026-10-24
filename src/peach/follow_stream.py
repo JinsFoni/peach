@@ -85,6 +85,8 @@ _PUBLIC_MEDIA_PROVIDERS = follow_providers.public_media_hosts()
 _VIDEO_URL_RE = re.compile(r"\bvideo(?:_alt)?_url\d*\s*:\s*'([^']+)'", re.IGNORECASE)
 #: 从文件名尾部读分辨率：`4564733_1080p.mp4` → 1080，`4564733_360.mp4` → 360。
 _VIDEO_HEIGHT_RE = re.compile(r"_(\d{3,4})p?\.mp4", re.IGNORECASE)
+#: xHamster 的档位是 `sources.mp4` 的键：`144p`、`240p`、`480p`、`720p`。
+_XHAMSTER_QUALITY_RE = re.compile(r"^(\d{2,4})p$", re.IGNORECASE)
 
 
 def _video_height(url: str) -> int:
@@ -145,10 +147,10 @@ def proxyable(provider: str, media_url: str | None) -> bool:
     return bool(url) and _allowed(provider, url)
 
 
-#: 播放时才去详情页解析正片的来源。它们落库时没有可抄的直链：rule34video 的
-#: 签名地址会过期，Pornhub 干脆只有 HLS 清单。`playable` 因此不能只看 `media_url`，
-#: 否则这两类条目在界面上是「不可播」，点开却是能播的。
-PLAY_AT_RESOLVE = frozenset({"rule34video", "pornhub"})
+#: 播放时才去详情页解析正片的来源。它们落库时没有可抄的直链：rule34video 与 xhamster
+#: 的签名地址会过期，Pornhub 干脆只有 HLS 清单。`playable` 因此不能只看 `media_url`，
+#: 否则这几类条目在界面上是「不可播」，点开却是能播的。
+PLAY_AT_RESOLVE = frozenset({"rule34video", "pornhub", "xhamster"})
 
 
 def resolvable_at_play(provider: str, page_url: str | None) -> bool:
@@ -171,9 +173,10 @@ def media_type(provider: str, media_url: str | None) -> str:
 class FollowMediaResolver:
     """Resolve stable ledger candidates into short-lived upstream playback URLs."""
 
-    #: 缓存里最多留多少条解析结果。只有 rule34video 会进这个缓存，一次列表几百条，
-    #: 用户挨个点开就会挨个留下一条；只按 TTL 过期的话，进程活多久它就长多久。
-    #: 上限按「一屏反复点开也够用」定，超了先丢已过期的，再丢最早写进来的。
+    #: 缓存里最多留多少条解析结果。按下播放才解析的来源（rule34video、xhamster 的签名
+    #: 直链，pornhub 的清单）都会进这个缓存，一次列表几百条，用户挨个点开就会挨个留下
+    #: 一条；只按 TTL 过期的话，进程活多久它就长多久。上限按「一屏反复点开也够用」定，
+    #: 超了先丢已过期的，再丢最早写进来的。
     MAX_CACHE_ENTRIES = 256
     #: 详情页没取到（删片、改版、被拒）后，同一条多久内不再回源。播放器起播时
     #: `/follow-stream`、`/follow-qualities` 和之后的每个 Range 请求都会来问一遍，
@@ -374,8 +377,8 @@ class FollowMediaResolver:
 
     def resolve(self, item: FollowItemRow, media_index: int | None = None,
                 height: int | None = None) -> ResolvedFollowMedia:
-        """解析可播地址。`height` 指定清晰度，只有 rule34video 与 Pornhub 有多档可选；
-        要的那档不存在就退回默认（最高档），不报错——签名 URL 会过期，
+        """解析可播地址。`height` 指定清晰度，只有 rule34video、Pornhub 与 xHamster 有多档
+        可选；要的那档不存在就退回默认（最高档），不报错——签名 URL 会过期，
         为一次选档失败中断播放不值得。"""
         media_items = item.metadata.get("media_items")
         if (not isinstance(media_items, list) or not media_items) \
@@ -409,8 +412,9 @@ class FollowMediaResolver:
                 cached = self._cached(item.id)
             if cached:
                 return _pick_quality(cached, height)
-            fetcher = (self._fetch_pornhub if item.provider == "pornhub"
-                       else self._fetch_rule34video)
+            fetcher = {"pornhub": self._fetch_pornhub,
+                       "xhamster": self._fetch_xhamster}.get(
+                           item.provider, self._fetch_rule34video)
             return _pick_quality(fetcher(item), height)
 
     def _fetch_rule34video(self, item: FollowItemRow) -> ResolvedFollowMedia:
@@ -508,6 +512,40 @@ class FollowMediaResolver:
         self._remember_miss(item.id)
         raise FollowMediaUnavailable("Pornhub 正片地址未取得")
 
+    def _fetch_xhamster(self, item: FollowItemRow) -> ResolvedFollowMedia:
+        """抓作品页，从页面内嵌的 JSON 里取各档渐进式 mp4。
+
+        这个站给的是可整段转发的 mp4，不是清单；签名带到期时间，所以只缓存默认那几
+        分钟，过期后重新解析一次。第一跳是 `video*.xhcdn.com`，取的时候会 302 到
+        `ip*.ahcdn.com`，两个主机都在这个来源的白名单里。
+        """
+        response = self.fetch(
+            item.provider,
+            HttpRequest("GET", str(item.url or ""),
+                        {"User-Agent": USER_AGENT, "Accept": "text/html"}),
+            self.timeout, self.max_bytes,
+        )
+        if response.status != 200 or len(response.body) > self.max_bytes:
+            LOGGER.warning("xhamster watch page for follow item %s unavailable: HTTP %s",
+                           item.id, response.status)
+            self._remember_miss(item.id)
+            raise FollowMediaUnavailable("xHamster 作品页未取得")
+        found = tuple(
+            (height, url) for height, url in xhamster_media_sources(
+                response.body.decode("utf-8", errors="replace"), item.external_id)
+            if _allowed(item.provider, url))
+        if not found:
+            LOGGER.warning("xhamster watch page for follow item %s has no mp4 url", item.id)
+            self._remember_miss(item.id)
+            raise FollowMediaUnavailable("xHamster 正片地址未取得")
+        resolved = ResolvedFollowMedia(
+            found[0][1], item.url,
+            qualities=found,
+            allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())))
+        with self._lock:
+            self._remember(item.id, resolved)
+        return resolved
+
     def _pornhub_playlist_ready(self, item: FollowItemRow, url: str) -> bool:
         """取回一次清单，确认这一档真的能播。
 
@@ -564,6 +602,57 @@ def pornhub_media_definitions(text: str) -> tuple[dict, ...]:
                 return tuple(row for row in parsed
                              if isinstance(row, dict) and row.get("format") == "hls")
     return ()
+
+
+def xhamster_media_sources(text: str, video_id: str) -> tuple[tuple[int, str], ...]:
+    """作品页里那几档渐进式 mp4，按高度从高到低。
+
+    站点把播放器要的东西整份放在 `<script id='initials-script'>window.initials=…`
+    里，其中 `downloadDropdownComponent.sources.mp4` 是 `{"144p": …, "720p": …}`。
+    这些地址带签名与到期时间（`end=`），只有页面刚给的那一份能用，所以播放时才解析。
+    页面上还有别的作品（推荐位），按 `videoId` 认这一条，不按出现顺序认。
+    """
+    marker = "window.initials="
+    start = text.find(marker)
+    if start < 0:
+        return ()
+    body_start = start + len(marker)
+    body_end = text.find("</script>", body_start)
+    if body_end < 0:
+        return ()
+    try:
+        payload = json.loads(text[body_start:body_end].strip().rstrip(";"))
+    except ValueError:
+        return ()
+    for node in _embedded_video_nodes(payload):
+        if str(node.get("videoId") or "") != str(video_id):
+            continue
+        sources = node.get("sources")
+        mp4 = sources.get("mp4") if isinstance(sources, dict) else None
+        if not isinstance(mp4, dict):
+            continue
+        found: list[tuple[int, str]] = []
+        for label, url in mp4.items():
+            matched = _XHAMSTER_QUALITY_RE.match(str(label))
+            if matched is None or not isinstance(url, str) or not url.startswith("https://"):
+                continue
+            height = int(matched.group(1))
+            if all(existing != url for _, existing in found):
+                found.append((height, url))
+        return tuple(sorted(found, key=lambda row: row[0], reverse=True))
+    return ()
+
+
+def _embedded_video_nodes(node):
+    """页面 JSON 里所有带 `videoId` 的对象，深度优先。"""
+    if isinstance(node, dict):
+        if "videoId" in node:
+            yield node
+        for value in node.values():
+            yield from _embedded_video_nodes(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _embedded_video_nodes(value)
 
 
 def rewrite_follow_playlist(body: bytes, base: str, *, item_id: int, root: str,

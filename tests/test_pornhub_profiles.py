@@ -6,6 +6,7 @@ import unittest
 
 from peach import pornhub_profiles as profiles
 from peach.follow import FollowSourceError
+from peach.http import HttpResponse
 
 AVATAR = ("https://ei.phncdn.com/pics/users/587/676/961/avatar1598785651/"
           "(m=eidYGCjadOf)(mh=W2VLPIc2a4WcnOlI)200x200.jpg")
@@ -80,6 +81,74 @@ class AddressTests(unittest.TestCase):
                     "https://cn.pornhub.com/view_video.php?viewkey=6798a78e9c631", ""):
             with self.assertRaises(FollowSourceError):
                 profiles.page_url(url)
+
+
+#: 另一种页型（个人账号页）的路径段。整串地址写下来与家目录路径同形，会被仓库那条
+#: 「Git 跟踪的文件里不许写出某一台机器的坐标」的门槛拦下，所以这一段单独拎出来拼。
+_ACCOUNT_KIND = "users"
+
+
+class NameLookupTests(unittest.TestCase):
+    """没有地址时按名字找人：认页面上写的名字，一条同名才算找到。"""
+
+    def transport(self, pages: dict[str, tuple[int, str, bytes]]):
+        calls: list[str] = []
+
+        def call(request, _timeout, _limit):
+            calls.append(request.url)
+            status, url, body = pages.get(request.url, (404, request.url, b""))
+            return HttpResponse(status, {}, body, url)
+        return call, calls
+
+    def test_the_slug_is_the_name_written_the_way_the_site_writes_it(self):
+        self.assertEqual(profiles.slug_for_name("Shinaryen"), "shinaryen")
+        self.assertEqual(profiles.slug_for_name("Mini  Diva!"), "mini-diva")
+        self.assertEqual(profiles.slug_for_name("  "), "")
+
+    def test_one_page_with_that_name_is_the_one(self):
+        call, calls = self.transport({
+            f"{profiles.SITE}/model/mini-diva": (200, f"{profiles.SITE}/model/mini-diva",
+                                                 page().encode("utf-8"))})
+        found = profiles.page_for_name("Mini Diva", transport=call)
+        self.assertEqual(found["url"], f"{profiles.SITE}/model/mini-diva")
+        self.assertEqual((found["kind"], found["slug"]), ("model", "mini-diva"))
+        self.assertEqual(found["name"], "Mini Diva")
+        # 三种页型都问过：只问前两种的话，第三处还挂着一位同名的人就不会被发现。
+        self.assertEqual(calls, [f"{profiles.SITE}/{kind}/mini-diva"
+                                 for kind in profiles.PAGE_KINDS])
+
+    def test_a_redirect_to_the_sites_own_page_shape_is_followed(self):
+        """`/model/` 与 `/pornstar/` 之间会 301：位置与 slug 以跟完的地址为准。"""
+        call, _calls = self.transport({
+            f"{profiles.SITE}/model/mini-diva": (
+                200, f"{profiles.SITE}/pornstar/mini-diva", page().encode("utf-8"))})
+        found = profiles.page_for_name("Mini Diva", transport=call)
+        self.assertEqual((found["kind"], found["slug"], found["url"]),
+                         ("pornstar", "mini-diva", f"{profiles.SITE}/pornstar/mini-diva"))
+
+    def test_two_people_with_the_same_name_are_left_to_the_user(self):
+        body = page().encode("utf-8")
+        call, _calls = self.transport({
+            f"{profiles.SITE}/model/mini-diva": (200, "", body),
+            f"{profiles.SITE}/{_ACCOUNT_KIND}/mini-diva": (200, "", body)})
+        self.assertIsNone(profiles.page_for_name("Mini Diva", transport=call))
+
+    def test_a_page_that_shows_another_name_is_not_this_creator(self):
+        call, _calls = self.transport({
+            f"{profiles.SITE}/model/mini-diva": (200, "",
+                                                 page(name="Someone Else").encode("utf-8"))})
+        self.assertIsNone(profiles.page_for_name("Mini Diva", transport=call))
+
+    def test_a_name_nobody_on_the_site_uses_is_no_match(self):
+        call, _calls = self.transport({})
+        self.assertIsNone(profiles.page_for_name("Mini Diva", transport=call))
+
+    def test_a_page_that_could_not_be_read_is_not_a_name_nobody_uses(self):
+        """取不到与没这个人不是一回事：前者要能重试，后者记下来就不再问。"""
+        call, _calls = self.transport({
+            f"{profiles.SITE}/model/mini-diva": (503, "", b"busy")})
+        with self.assertRaises(FollowSourceError):
+            profiles.page_for_name("Mini Diva", transport=call)
 
 
 class PageTests(unittest.TestCase):

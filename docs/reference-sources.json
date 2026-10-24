@@ -1109,14 +1109,31 @@
       "url": "https://cn.pornhub.com/model/mini-diva/videos",
       "snapshot": "docs/reference-snapshots/pornhub-model-profile.md",
       "checked_on": "2026-10-24",
-      "sha256": "3757f554648ab0f5ef556f1b297c8ed56bdc6a1b236b548a0f8529c77b427ba7",
-      "role": "追更来源绑出来的创作者补头像与资料时读哪一页、读哪些节点、哪一格换算成账本的列，以及头像签名地址只有页面给的那一条能取。",
+      "sha256": "c6c8e81ef49fd1786eda5638b74fec6ef3742ced32ff59410fd3881dd3021882",
+      "role": "追更来源绑出来的创作者补头像与资料时读哪一页、读哪些节点、哪一格换算成账本的列、头像签名地址只有页面给的那一条能取，以及没有地址时按名字找人只能拼 slug 再核对页面名字（站上检索接口全不可用）。",
       "consumers": [
         "src/peach/pornhub_profiles.py",
         "src/peach/creator_profile_followup.py",
         "src/peach/performer_header.py",
         "tests/test_pornhub_profiles.py",
         "tests/test_creator_profile_followup.py"
+      ]
+    },
+    {
+      "id": "follow-xhamster-creator",
+      "cadence": "manual",
+      "volatile": true,
+      "name": "xHamster 创作者页与作品页证据",
+      "url": "https://zh.xhamster.com/creators/shinaryen-89795/newest",
+      "snapshot": "docs/reference-snapshots/follow-xhamster-creator.md",
+      "checked_on": "2026-10-24",
+      "sha256": "f229aa3171dffccf8b724ceb0cb11f4b5b813ba81db3ba1ecda15ca9991a72f8",
+      "role": "追更来源 xhamster 的链接形状、列表选择器与「一天只印一次日期」的读法、分页只有路径段一种写法（`/newest/<N>`，翻过尽头回 404），以及作品页里各档渐进式 mp4 的位置与 302 到 `ip*.ahcdn.com` 的主机边界。",
+      "consumers": [
+        "src/peach/follow_providers.py",
+        "src/peach/follow_sources.py",
+        "src/peach/follow_stream.py",
+        "tests/test_follow_xhamster.py"
       ]
     }
   ]
