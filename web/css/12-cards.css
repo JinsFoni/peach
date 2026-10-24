@@ -115,11 +115,13 @@ h2[data-page-title]{margin:0;font:var(--board-title);letter-spacing:0}
 .playlistcard .mixcopy{flex:1}
 .mixcopy{min-width:0}.mixcopy b,.mixcopy span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mixcopy b{font-size:var(--fs-md);line-height:1.45}.mixcopy span{font-size:var(--fs-xs);color:var(--muted);margin-top:2px}
-/* 圆角只在最外面裁一次：`clip-path` 配一层满格的矩形蒙版，格子里的黑底、封面、悬停层与模糊衬底
+/* 圆角只在最外面裁一次：`clip-path` 配一层满格的矩形蒙版，格子的底色、封面、悬停层与模糊衬底
    先合成一张再按 `--pic-radius` 切。格子本身不写 `border-radius`，`overflow` 就只是矩形裁切：按圆角
-   裁的话每一层各切一次，抗锯齿那一圈里底下的黑会透上来，浅色封面四角就是一圈灰黑边。光有
+   裁的话每一层各切一次，抗锯齿那一圈里底下的底色会透上来，浅色封面四角就是一圈灰黑边。光有
    `clip-path` 不够，没有蒙版时 Chrome 照样逐层切。 */
-.pic{--pic-radius:var(--badge-radius);position:relative;aspect-ratio:var(--card-ratio,16/9);background:#000;
+/* 格子的底是表面那一档（`--surface`，与列表视图的图位同一档）：封面还没画上来时，这一格是
+   一块面而不是一块黑。叠层纸边压在格子下面，这层因此不透明，纸边的线条透不进来。 */
+.pic{--pic-radius:var(--badge-radius);position:relative;aspect-ratio:var(--card-ratio,16/9);background:var(--surface);
   clip-path:inset(0 round var(--pic-radius));mask-image:linear-gradient(#000 0 0);
   overflow:hidden;display:flex;align-items:center;justify-content:center}
 /* 传统正封的比例留白使用同图补底，圆角由最外层统一裁切。 */
@@ -298,10 +300,10 @@ body[data-density="dense"] .card .meta .size{flex:none;white-space:nowrap}
 /* 占位卡直接套真卡的 `.t` 与 `.s`：标题块是两行 2.7em，下面那行放一个零宽字符，行高
    跟真卡那行字同一套规则，到货那一下整行不跳。 */
 .feednewskeleton{pointer-events:none}
-.feednewcard:not(.feednewskeleton) .pic{background-color:var(--surface);color:var(--muted)}
+.feednewcard:not(.feednewskeleton) .pic{color:var(--muted)}
 .feednewskeleton .pic{background:var(--hover)}
 .feednewskeleton .t>.skeleton{height:2.7em}
 .feednewskeleton .s>.skeleton{width:72%;height:auto}
 /* 占位卡不是在等哪一张图，它本身就是等待态：微光和骨架同一帧出现。`.imgwait` 那 180ms
-   的淡入门槛是给本地图的，套在这里，那 180ms 里露出来的是 `.pic` 的黑底。 */
+   的淡入门槛是给本地图的，套在这里，那 180ms 里露出来的是 `.pic` 的底色。 */
 .feednewskeleton .pic.imgwait::after{transition:none}

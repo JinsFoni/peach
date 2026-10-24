@@ -129,15 +129,17 @@ body[data-surface="/trash"] .peach-react button[data-media-title] {
 .peach-react [data-media-card]:not([data-variant="next"]) [data-media-meta] > * { pointer-events: auto; }
 
 /* ── 封面格 ──
- * 圆角只在最外面裁一次：`clip-path` 配一层满格的矩形蒙版，格子里的黑底、封面、悬停视频和模糊衬底
+ * 圆角只在最外面裁一次：`clip-path` 配一层满格的矩形蒙版，格子的底色、封面、悬停视频和模糊衬底
  * 先合成一张再按 `--pic-radius` 切。格子本身不写 `border-radius`，`overflow` 与 `content-visibility`
- * 的裁切就只是矩形：按圆角裁的话每一层各切一次，抗锯齿那一圈里底下的黑会透上来，浅色封面四角就是
+ * 的裁切就只是矩形：按圆角裁的话每一层各切一次，抗锯齿那一圈里底下的底色会透上来，浅色封面四角就是
  * 一圈灰黑边。光有 `clip-path` 不够，没有蒙版时 Chrome 照样逐层切。 */
 .peach-react :is([data-media-pic], [data-mix-cover]) {
   --pic-radius: var(--surface-radius);
   clip-path: inset(0 round var(--pic-radius));
   mask-image: linear-gradient(#000 0 0);
 }
+/* 格子的底是表面那一档（`--surface`，与列表视图的图位同一档）：封面还没画上来时，这一格是
+   一块面而不是一块黑。叠层纸边压在格子下面，这层因此不透明，纸边的线条透不进来。 */
 .peach-react [data-media-pic] {
   position: relative;
   display: flex;
@@ -145,7 +147,7 @@ body[data-surface="/trash"] .peach-react button[data-media-title] {
   justify-content: center;
   overflow: hidden;
   aspect-ratio: var(--card-ratio, 16 / 9);
-  background: #000;
+  background: var(--surface);
 }
 /* 传统正封的比例留白复用共享封面取景写入的同图补底。 */
 .peach-react [data-media-pic]::before {
