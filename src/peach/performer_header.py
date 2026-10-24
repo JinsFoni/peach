@@ -1,9 +1,13 @@
 """女优页头要的两样东西：五项资料（`profile`）与按名义分组的别名（`name_groups`）（ADR-0069）。
 
 资料取自 `performer_profile`（ADR-0067），这里只读不写。页头只给五项：生日与年龄、身材、
-出道、生涯（出演年份）、站上的标签。血型、出身地、趣味这些在账本里，不上页头：页头是认人用的，
-一行放不下的东西放进去只会把这五项挤成两行。取不到的项不给，前端也就不画那一格，
+出道、生涯（出演年份）、站上的标签。血型、出身地、趣味这些在账本里，不进资料卡：卡里那一栏是
+认人用的，一行放不下的东西放进去只会把这五项挤成两行。取不到的项不给，前端也就不画那一格，
 不写「未取得」。
+
+发布账号（ADR-0096 建出来的 `creator`）在站上有一整页自我介绍，读数是简介加十几项资料
+（感情、取向、出身地、体重、纹身……）。这些走 `about()`，前端排在资料卡下面另起一栏
+（ADR-0115）：卡里仍旧只有那五项，多出来的读数不挤它。
 
 别名分组的口径：
 
@@ -36,6 +40,12 @@ HIDDEN_SOURCES = frozenset({"r18:performer", PLANNING_ALIAS_SOURCE})
 #: 名字那一行在读音之后先列几个。
 SHOWN = 3
 CURRENT, FORMER, OTHER = "现名", "旧名义", "其它"
+#: `raw` 里那两项的键，与资料站上的写法一致。
+_ABOUT, _BIO = "资料", "简介"
+#: 资料项那几格的长度上限：一格值写四五十个字就不是读数是段落了，简介同理。
+LABEL_LIMIT, VALUE_LIMIT, BIO_LIMIT = 8, 120, 280
+#: 图标名缺省值，雪碧图里的那一枚「i」。
+DEFAULT_GLYPH = "info"
 #: 身材一格的列 → 页头的键。
 _BODY = (("height_cm", "height"), ("bust_cm", "bust"), ("waist_cm", "waist"),
          ("hip_cm", "hip"), ("cup", "cup"))
@@ -77,6 +87,36 @@ def facts(row: dict | None, today: date, decisions: dict[str, str | None] | None
     if tags:
         found["tags"] = tags
     return found
+
+
+def about(row: dict | None) -> dict:
+    """发布账号在站上那一页：简介一段、资料表若干项。没有这两样的来源不给。
+
+    两者都在 `raw`（站上原文那一栏）里，键是站上的写法：`简介` 是一段话，`资料` 是
+    `[{label, value, glyph}]`。图标名由采集那一侧定（`pornhub_profiles.ABOUT_FIELDS`），
+    这里是原样下发——页头不认识哪一家站点。值太长按页面的读法截断，整段简介挂在
+    `title` 上也读不完。"""
+    raw = (row or {}).get("raw") or {}
+    found: dict = {}
+    items = [item for item in (_about_item(entry) for entry in raw.get(_ABOUT) or []) if item]
+    if items:
+        found["about"] = items
+    bio = " ".join(str(raw.get(_BIO) or "").split())
+    if bio:
+        found["bio"] = bio[:BIO_LIMIT] + ("…" if len(bio) > BIO_LIMIT else "")
+    return found
+
+
+def _about_item(entry) -> dict | None:
+    """资料表里的一行；缺标签或缺值的格子不画，不写「未取得」。"""
+    if not isinstance(entry, dict):
+        return None
+    label = " ".join(str(entry.get("label") or "").split())
+    value = " ".join(str(entry.get("value") or "").split())
+    if not label or not value:
+        return None
+    glyph = str(entry.get("glyph") or "").strip() or DEFAULT_GLYPH
+    return {"label": label[:LABEL_LIMIT], "value": value[:VALUE_LIMIT], "glyph": glyph}
 
 
 def site_tags(raw: list, decisions: dict[str, str | None] | None = None) -> list[str]:
@@ -211,5 +251,5 @@ def header(connection: sqlite3.Connection, entity_id: int, canonical: str,
     """`q_entity` 给女优页并进去的两项。"""
     row = read_profile(connection, entity_id) if _has_table(connection) else None
     decisions = load_genre_decisions(connection) if row and _has_table(connection, "genre_decision") else None
-    return {"profile": facts(row, today or date.today(), decisions),
+    return {"profile": {**facts(row, today or date.today(), decisions), **about(row)},
             "name_groups": name_groups(connection, entity_id, canonical, page_names(row))}

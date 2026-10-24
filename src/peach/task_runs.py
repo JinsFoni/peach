@@ -100,6 +100,7 @@ TASK_LABELS = {
     "entity-avatar": "补全资料图片",
     "studio-mark": "补厂牌官网与标识",
     "creator-identity": "查创作者身份",
+    "creator-profile": "补发布账号资料",
     "code-samples": "补番号样张",
     "feed-check": "订阅源拉取",
     "feed-scrape": "取新作资料",

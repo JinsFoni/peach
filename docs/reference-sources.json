@@ -1090,7 +1090,7 @@
       "url": "https://cn.pornhub.com/model/mini-diva/videos",
       "snapshot": "docs/reference-snapshots/follow-pornhub-hls.md",
       "checked_on": "2026-10-24",
-      "sha256": "6ee4893869c7da1b8364717fc2410637d676b9ef997f4a9faab4cf310d7065b3",
+      "sha256": "d6ff7b47d5da38a14d681390a275f86f11fe352354f24055b5ef9b2ca7d5ba2c",
       "role": "追更来源 pornhub 的抓取站选择（中文站给中文分类与标签）、只取本人列表的选择器、由 vkey 反推的列表时间、页型归一、详细时间与标签来源，以及「只有 HLS、没有渐进式 mp4」的播放边界证据。",
       "consumers": [
         "src/peach/follow_providers.py",
@@ -1099,6 +1099,24 @@
         "src/peach/routes_media.py",
         "tests/test_follow_pornhub.py",
         "tests/test_follow_stream.py"
+      ]
+    },
+    {
+      "id": "pornhub-model-profile",
+      "cadence": "manual",
+      "volatile": true,
+      "name": "Pornhub 人物页上的头像、简介与资料表证据",
+      "url": "https://cn.pornhub.com/model/mini-diva/videos",
+      "snapshot": "docs/reference-snapshots/pornhub-model-profile.md",
+      "checked_on": "2026-10-24",
+      "sha256": "3757f554648ab0f5ef556f1b297c8ed56bdc6a1b236b548a0f8529c77b427ba7",
+      "role": "追更来源绑出来的创作者补头像与资料时读哪一页、读哪些节点、哪一格换算成账本的列，以及头像签名地址只有页面给的那一条能取。",
+      "consumers": [
+        "src/peach/pornhub_profiles.py",
+        "src/peach/creator_profile_followup.py",
+        "src/peach/performer_header.py",
+        "tests/test_pornhub_profiles.py",
+        "tests/test_creator_profile_followup.py"
       ]
     }
   ]
