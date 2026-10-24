@@ -11,6 +11,7 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from peach.follow import FollowHistoryEnd, FollowSourceError, FollowSourceRateLimited
 from peach.follow_check import plan_check, run_check
@@ -36,8 +37,11 @@ class _Credentials:
 
 
 class _Connector:
-    def __init__(self, fetch=None, error=None):
+    """单页替身：默认只有第 1 页，要更早的页就是尽头。首次采集因此会翻一页就停。"""
+
+    def __init__(self, fetch=None, error=None, pages=(0,)):
         self._fetch, self._error = fetch, error
+        self.pages = frozenset(pages)
         self.calls = []
 
     def fetch(self, ref, *, etag=None, last_modified=None, page=0):
@@ -45,6 +49,8 @@ class _Connector:
                            "last_modified": last_modified, "page": page})
         if self._error is not None:
             raise self._error
+        if page not in self.pages:
+            raise FollowHistoryEnd("没有更多历史内容")
         return self._fetch
 
 
@@ -100,9 +106,11 @@ class IncrementalCheckTests(_CheckCase):
         self.addCleanup(connection.close)
         return connection
 
-    def _connector(self, enrich_one):
+    def _connector(self, enrich_one, pages=(0,)):
         class Connector(_BaseConnector):
             def fetch(self, ref, **kwargs):
+                if kwargs.get('page') not in pages:
+                    raise FollowHistoryEnd("没有更多历史内容")
                 candidates, probed = self.enrich(tuple(
                     FollowCandidate(provider='fanbox', external_id=str(index),
                                     title=f'作品 {index}', partial=True)
@@ -177,16 +185,17 @@ class IncrementalCheckTests(_CheckCase):
                 raise InterruptedError('任务中断')
             return candidate
 
+        # 往回翻的是第 2 页；翻页途中被打断，已经收下的条目照常落库，游标不动。
         with self.assertRaises(InterruptedError):
-            self._run(source, self._connector(enrich), older=True)
+            self._run(source, self._connector(enrich, pages=(1,)), older=True)
         self.assertEqual(len(self.store.items(source_id=source)), 2)
         self.assertEqual(self._row(source)['backfill_page'], 0)
         self.assertIsNone(self._row(source)['last_checked_at'])
 
     def test_detail_dates_enforce_the_persisted_history_boundary(self):
+        """行上的日期是「未取得」时，详情给出的准确日期说了算：早于边界就不收。"""
         source = self._register()
-        self.store.merge_source_metadata(source, {
-            'initial_history_after': '2026-08-04T00:00:00Z', 'initial_history_floor': 0}, MOMENT)
+        self.store.merge_source_metadata(source, {'initial_history_after': '2026-08-04T00:00:00Z'}, MOMENT)
         self.connection.commit()
 
         def enrich(candidate):
@@ -335,13 +344,14 @@ class RunCheckTests(_CheckCase):
     def test_paging_back_asks_for_the_next_page_and_drops_the_cursors(self):
         source_id = self._register(provider="kemono", ref="fanbox/1",
                                    url="https://kemono.cr/fanbox/user/1")
-        connector = _Connector(_fetch(provider="kemono", ref="fanbox/1"))
+        page = _fetch(provider="kemono", ref="fanbox/1")
+        connector = _PagedConnector({1: page, 2: page})
         result = self._run(source_id, connector, older=True)
         self.assertEqual(result.page, 1)
         self.assertTrue(result.older)
         self.assertEqual(connector.calls[0]["page"], 1)
         # 第二次再往回，接着上一次走到的位置。
-        connector = _Connector(_fetch(provider="kemono", ref="fanbox/1"))
+        connector = _PagedConnector({1: page, 2: page})
         self.assertEqual(self._run(source_id, connector, older=True).page, 2)
 
     def test_the_end_of_history_is_recorded_not_reported_as_a_failure(self):
@@ -460,6 +470,8 @@ def _dated(prefix, count, start, provider="kemono"):
 
 
 class InitialHistoryTests(_CheckCase):
+    """首次采集按「采集范围」翻页：范围内的全收，范围外的连一页都不多取。"""
+
     def sample(self):
         return tuple(FollowCandidate(provider='fanbox', external_id=key, title=key,
                                      published_at=date) for key, date in (
@@ -467,44 +479,100 @@ class InitialHistoryTests(_CheckCase):
             ('boundary', '2026-08-04T00:00:00Z'),
             ('new', '2026-09-02T00:00:00Z'), ('undated', None)))
 
-    def candidates(self):
-        """落在 30 天内的已经够下限，边界之外的那条照常跳过。"""
-        return _dated('recent', 30, datetime(2026, 9, 2, tzinfo=timezone.utc),
-                      provider='fanbox') + self.sample()
+    def _kemono(self):
+        return self._register(provider='kemono', ref='fanbox/1',
+                              url='https://kemono.cr/fanbox/user/1')
 
-    def test_first_check_keeps_recent_and_undated_items_and_pins_the_boundary(self):
+    def _page(self, prefix, count, start):
+        return _fetch(provider='kemono', ref='fanbox/1',
+                      candidates=_dated(prefix, count, start))
+
+    def test_the_boundary_is_the_moment_minus_the_range(self):
+        """边界是采集那一刻往前 30 天，不跟着收下的最早一条往下滑。"""
         source = self._register()
-        connector = _Connector(_fetch(candidates=self.candidates()))
+        connector = _Connector(_fetch(candidates=self.sample()))
         result = self._run(source, connector, initial_days=30)
         self.assertEqual(result.history_skipped, 1)
         stored = {item.external_id for item in self.store.items(source_id=source)}
         self.assertTrue({'boundary', 'new', 'undated'} <= stored)
-        self.assertNotIn('old', stored)
-        self.assertEqual([call['page'] for call in connector.calls], [0], "够下限就不往前翻")
-        boundary = json.loads(self._row(source)['metadata_json'])['initial_history_after']
+        self.assertNotIn('old', stored, "整条早于边界的不收")
+        self.assertEqual([call['page'] for call in connector.calls], [0, 1],
+                         "第一页收完接着往前翻，翻到站点说没有更早的为止")
+        self.assertEqual(json.loads(self._row(source)['metadata_json'])['initial_history_after'],
+                         (MOMENT - timedelta(days=30)).isoformat())
+
+    def test_an_unlimited_range_pages_to_the_end_of_history(self):
+        source = self._kemono()
+        start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        pages = {n: self._page(f'p{n}', 12, start - timedelta(days=20 * n)) for n in range(4)}
+        connector = _PagedConnector(pages)
         result = self._run(source, connector, initial_days=0)
-        self.assertEqual(result.history_skipped, 1)
-        self.assertEqual(json.loads(self._row(source)['metadata_json'])['initial_history_after'], boundary)
-        self._run(source, connector, older=True, initial_days=30)
-        self.assertIn('old', {item.external_id for item in self.store.items(source_id=source)})
-        self.assertEqual(connector.calls[-1]['page'], 0)
-        self.assertIsNone(connector.calls[-1]['etag'])
-        self._run(source, connector, older=True, initial_days=30)
-        self.assertEqual(connector.calls[-1]['page'], 1)
+        self.assertEqual([call['page'] for call in connector.calls], [0, 1, 2, 3, 4],
+                         "一路翻到站点说没有更早的为止")
+        self.assertEqual(result.outcome.added, 48, "往前翻的每一页都整页收下")
+        row = self._row(source)
+        self.assertEqual(row['backfill_page'], 3, "游标停在最后一页")
+        self.assertEqual(row['last_status'], 'not_modified', "翻到尽头是一次成功的检查")
+
+    def test_a_day_range_stops_at_the_page_that_is_entirely_before_the_boundary(self):
+        source = self._kemono()
+        pages = {0: self._page('a', 12, datetime(2026, 9, 2, tzinfo=timezone.utc)),
+                 1: self._page('b', 12, datetime(2026, 8, 20, tzinfo=timezone.utc)),
+                 2: self._page('c', 12, datetime(2026, 6, 1, tzinfo=timezone.utc))}
+        connector = _PagedConnector(pages)
+        result = self._run(source, connector, initial_days=30)
+        self.assertEqual([call['page'] for call in connector.calls], [0, 1, 2],
+                         "第 2 页整页在边界外，不必再往后翻")
+        self.assertEqual(result.outcome.added, 24)
+        self.assertEqual(result.history_skipped, 12)
+        self.assertEqual(self._row(source)['backfill_page'], 2)
+
+    def test_a_range_with_nothing_in_it_collects_nothing(self):
+        """范围内一条都没有就是没有：范围由用户定，不拿兜底的一页顶替它。"""
+        source = self._kemono()
+        connector = _PagedConnector({0: self._page('old', 5, datetime(2026, 1, 1, tzinfo=timezone.utc))})
+        result = self._run(source, connector, initial_days=30)
+        self.assertEqual([call['page'] for call in connector.calls], [0], "第一页整页在边界外就不往前翻")
+        self.assertEqual(result.outcome.added, 0)
+        self.assertEqual(result.history_skipped, 5)
+        self.assertEqual(len(self.store.items(source_id=source)), 0)
+
+    def test_a_later_check_reads_the_first_page_only(self):
+        source = self._kemono()
+        self._run(source, _PagedConnector({0: self._page('a', 3, datetime(2026, 9, 2, tzinfo=timezone.utc)),
+                                           1: self._page('b', 3, datetime(2026, 8, 20, tzinfo=timezone.utc))}),
+                  initial_days=0)
+        connector = _PagedConnector({0: self._page('c', 3, datetime(2026, 9, 3, tzinfo=timezone.utc)),
+                                     1: self._page('d', 3, datetime(2026, 8, 20, tzinfo=timezone.utc))})
+        self._run(source, connector, initial_days=0)
+        self.assertEqual([call['page'] for call in connector.calls], [0], "常规检查只看第一页")
+
+    def test_paging_stops_at_the_page_brake(self):
+        """分页失控的站点：翻到上限就停，一趟检查不会变成无底洞。"""
+        source = self._kemono()
+        pages = {n: self._page(f'p{n}', 1, datetime(2026, 9, 2, tzinfo=timezone.utc)) for n in range(6)}
+        connector = _PagedConnector(pages)
+        with mock.patch('peach.follow_check.MAX_HISTORY_PAGES', 3):
+            result = self._run(source, connector, initial_days=0)
+        self.assertEqual([call['page'] for call in connector.calls], [0, 1, 2, 3])
+        self.assertTrue(result.ok)
 
     def test_failed_first_check_retries_with_the_same_history_boundary(self):
         source = self._register()
         self._run(source, _Connector(error=FollowSourceError('offline')), initial_days=30)
-        result = self._run(source, _Connector(_fetch(candidates=self.candidates())), initial_days=0)
+        result = self._run(source, _Connector(_fetch(candidates=self.sample())), initial_days=0)
         self.assertEqual(result.history_skipped, 1)
+        self.assertEqual(json.loads(self._row(source)['metadata_json'])['initial_history_after'],
+                         (MOMENT - timedelta(days=30)).isoformat(),
+                         "第一次没成的来源，边界照旧沿用第一次定下的那个")
 
     def test_existing_sources_and_unlimited_initial_checks_keep_all_dates(self):
         source = self._register()
         self.store.record(source, _fetch(), moment=MOMENT)
-        result = self._run(source, _Connector(_fetch(candidates=self.candidates())), initial_days=7)
+        result = self._run(source, _Connector(_fetch(candidates=self.sample())), initial_days=7)
         self.assertEqual(result.history_skipped, 0)
         source = self._register(ref='another')
-        result = self._run(source, _Connector(_fetch(ref='another', candidates=self.candidates())), initial_days=0)
+        result = self._run(source, _Connector(_fetch(ref='another', candidates=self.sample())), initial_days=0)
         self.assertEqual(result.history_skipped, 0)
 
     def test_old_list_entries_do_not_spend_detail_requests(self):
@@ -517,66 +585,6 @@ class InitialHistoryTests(_CheckCase):
         self.assertEqual(visited, ['boundary', 'new', 'undated'])
         self.assertEqual(probed, 3)
         self.assertEqual(connector.history_skipped, 1)
-
-    def test_the_connector_lets_through_at_most_the_floor_of_older_entries(self):
-        from peach.follow_sources import _BaseConnector
-        connector = _BaseConnector(enrich_budget=0)
-        connector.history_after = datetime(2026, 8, 4, tzinfo=timezone.utc)
-        connector.history_floor = 1
-        listed = self.sample() + (FollowCandidate(provider='fanbox', external_id='older',
-                                                  title='older', published_at='2025-01-01T00:00:00Z'),)
-        candidates, _probed = connector.enrich(listed)
-        self.assertEqual([c.external_id for c in candidates], ['old', 'boundary', 'new', 'undated'])
-        # 同一条再问一次仍放行，不重复占名额。
-        self.assertTrue(connector.within_history(listed[0]))
-        self.assertEqual(connector.history_skipped, 1)
-
-    def test_a_sparse_author_is_topped_up_with_the_newest_older_entries(self):
-        """30 天里只有一条时补到 30 条，边界挪到收下的最早一条，之后的检查不再报跳过。"""
-        source = self._register(provider='kemono', ref='fanbox/1', url='https://kemono.cr/fanbox/user/1')
-        start = datetime(2026, 7, 1, tzinfo=timezone.utc)
-        page = _fetch(provider='kemono', ref='fanbox/1', candidates=(
-            FollowCandidate(provider='kemono', external_id='new', title='new',
-                            published_at='2026-09-02T00:00:00Z'),) + _dated('old', 40, start))
-        connector = _PagedConnector({0: page})
-        result = self._run(source, connector, initial_days=30)
-        self.assertEqual(result.outcome.added, 30)
-        self.assertEqual(result.history_skipped, 11)
-        self.assertEqual([call['page'] for call in connector.calls], [0])
-        metadata = json.loads(self._row(source)['metadata_json'])
-        self.assertEqual(metadata['initial_history_after'], (start - timedelta(days=28)).isoformat())
-        self.assertEqual(metadata['initial_history_floor'], 0)
-        self.assertTrue(metadata['initial_history_first_page_pending'])
-        again = self._run(source, _PagedConnector({0: page}), initial_days=30)
-        self.assertEqual(again.history_skipped, 11)
-        self.assertEqual(len(self.store.items(source_id=source)), 30)
-
-    def test_a_short_first_page_pages_back_until_the_floor_is_met(self):
-        source = self._register(provider='kemono', ref='fanbox/1', url='https://kemono.cr/fanbox/user/1')
-        start = datetime(2026, 6, 1, tzinfo=timezone.utc)
-        pages = {n: _fetch(provider='kemono', ref='fanbox/1',
-                           candidates=_dated(f'p{n}', 12, start - timedelta(days=20 * n)))
-                 for n in range(4)}
-        connector = _PagedConnector(pages)
-        result = self._run(source, connector, initial_days=30)
-        self.assertEqual([call['page'] for call in connector.calls], [0, 1, 2])
-        self.assertEqual(result.outcome.added, 36, "往前翻的页整页收下")
-        self.assertEqual(len(result.fetch.candidates), 36)
-        row = self._row(source)
-        self.assertEqual(row['backfill_page'], 2)
-        self.assertEqual(json.loads(row['metadata_json'])['initial_history_after'],
-                         (start - timedelta(days=40 + 11)).isoformat())
-
-    def test_the_top_up_stops_quietly_at_the_end_of_history(self):
-        source = self._register(provider='kemono', ref='fanbox/1', url='https://kemono.cr/fanbox/user/1')
-        page = _fetch(provider='kemono', ref='fanbox/1',
-                      candidates=_dated('old', 5, datetime(2026, 6, 1, tzinfo=timezone.utc)))
-        connector = _PagedConnector({0: page})
-        result = self._run(source, connector, initial_days=30)
-        self.assertTrue(result.ok)
-        self.assertEqual([call['page'] for call in connector.calls], [0, 1])
-        self.assertEqual(result.outcome.added, 5)
-        self.assertEqual(json.loads(self._row(source)['metadata_json'])['initial_history_floor'], 0)
 
 
 if __name__ == "__main__":

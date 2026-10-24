@@ -6,7 +6,7 @@
  * 摆哪些东西。
  *
  * 地址栏归壳：点筛选、排序、换媒体都只调 `actions.route`，壳写好地址再把新的 `view` 推回来。
- * 这一页唯一联网的动作是「检查更新」与「抓更早的一页」，两者起的是同一趟后台任务，进度由
+ * 这一页唯一联网的动作是「检查更新」与「抓全部历史」，两者起的是同一趟后台任务，进度由
  * `helpers.jobProgress` 盯着，跑完失效这一页的查询重取。 */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, type InfiniteData } from '@tanstack/react-query';
@@ -162,7 +162,17 @@ export function FollowFeedPage(props: FollowFeedProps) {
       <div key={job.generation} ref={job.host} data-follow-progress="" />
       {!job.busy && job.report ? <Note tone="neutral" title="检查结果">{job.report}</Note> : null}
       <div data-follow-feed="" data-select-mode={props.selectMode ? '' : undefined}>
-        <Head onManage={actions.openManage}>
+        <Head onManage={actions.openManage}
+          meta={canBackfill ? backfillState(facets.sources) : ''}>
+          {canBackfill ? (
+            <Button variant="secondary" leadingIcon={job.olderBusy ? undefined : HISTORY} data-follow-older=""
+              aria-busy={job.busy || undefined}
+              onClick={() => void job.start(true)}>
+              {job.olderBusy
+                ? <><span className="contents" dangerouslySetInnerHTML={{ __html: spinnerHtml('抓取中') }} /><span>抓取中…</span></>
+                : '抓全部历史'}
+            </Button>
+          ) : null}
           {facets.sources.length ? (
             <Button variant="primary" data-follow-recheck="" aria-label="检查每个来源的更新"
               aria-busy={job.busy || undefined}
@@ -183,34 +193,20 @@ export function FollowFeedPage(props: FollowFeedProps) {
         {facets.broken.length ? <BrokenNote count={facets.broken.length} onManage={actions.openManage} /> : null}
         <List key={query.queryKey.join('\u0000')} retryKey={result.dataUpdatedAt} pending={listPending} facets={facets} data={data} context={context}
           props={props} />
-        {data.has_more || canBackfill ? (
+        {data.has_more ? (
           <div data-follow-pagination="">
-            {data.has_more ? (
-              <span data-follow-page-action="">
-                {data.groups.length < FOLLOW_AUTO_LOAD_LIMIT ? (
-                  <LoadMore key={result.data?.pages.length} entity enabled={() => !job.busyRef.current}
-                    load={async () => { await result.fetchNextPage({ throwOnError: true }) }}>
-                    <CHEVRON_DOWN className="size-3.5" />加载更多
-                  </LoadMore>
-                ) : (
-                  <ManualMore busy={result.isFetchingNextPage}
-                    error={result.isFetchNextPageError ? requestErrorMessage(result.error) : ''}
-                    load={() => { if (!job.busyRef.current && !result.isFetchingNextPage) void result.fetchNextPage() }} />
-                )}
-              </span>
-            ) : null}
-            {canBackfill ? (
-              <span data-follow-page-action="">
-                <Button variant="secondary" leadingIcon={job.olderBusy ? undefined : HISTORY} data-follow-older=""
-                  aria-busy={job.busy || undefined}
-                  onClick={() => void job.start(true)}>
-                  {job.olderBusy
-                    ? <><span className="contents" dangerouslySetInnerHTML={{ __html: spinnerHtml('抓取中') }} /><span>抓取中…</span></>
-                    : '抓更早的一页'}
-                </Button>
-                <span data-follow-backfill="">{backfillState(facets.sources)}</span>
-              </span>
-            ) : null}
+            <span data-follow-page-action="">
+              {data.groups.length < FOLLOW_AUTO_LOAD_LIMIT ? (
+                <LoadMore key={result.data?.pages.length} entity enabled={() => !job.busyRef.current}
+                  load={async () => { await result.fetchNextPage({ throwOnError: true }) }}>
+                  <CHEVRON_DOWN className="size-3.5" />加载更多
+                </LoadMore>
+              ) : (
+                <ManualMore busy={result.isFetchingNextPage}
+                  error={result.isFetchNextPageError ? requestErrorMessage(result.error) : ''}
+                  load={() => { if (!job.busyRef.current && !result.isFetchingNextPage) void result.fetchNextPage() }} />
+              )}
+            </span>
           </div>
         ) : null}
       </div>
@@ -218,11 +214,13 @@ export function FollowFeedPage(props: FollowFeedProps) {
   );
 }
 
-/** 页头：标题与「管理关注」恒在，检查更新那枚键要等来源读到才摆（`children`）。 */
-function Head({ onManage, children }: { onManage(): void; children?: ReactNode }) {
+/** 页头：标题与「管理关注」恒在，检查更新那枚键要等来源读到才摆（`children`）。
+ *  `meta` 是标题旁那句来源状态——每页抓到第几页，窄屏也跟标题同一行走。 */
+function Head({ onManage, meta, children }: { onManage(): void; meta?: string; children?: ReactNode }) {
   return (
     <div data-follow-head="">
       <h2 data-follow-title="">关注</h2>
+      {meta ? <span data-follow-backfill="">{meta}</span> : null}
       <span data-follow-head-actions="">
         <Button variant="secondary" leadingIcon={SETTINGS} data-follow-manage="" onClick={onManage}>
           管理关注
@@ -246,9 +244,9 @@ function ManualMore({ busy, error, load }: { busy: boolean; error: string; load(
   );
 }
 
-/* ── 检查更新与往回抓 ──
- * 一次只往回一页：追更的常规检查永远只看第一页，往回抓是一个独立的、显式的动作，点一次走一页，
- * 不自动、不连翻。两枚键起的是同一趟任务，任务在跑时两枚一起忙，续页也停下。 */
+/* ── 检查更新与抓全部历史 ──
+ * 常规检查只看每个来源的第一页，这是追更；「抓全部历史」是另一件事：从回填游标一路翻到站点
+ * 说没有更早的，一次到底。两枚键起的是同一趟任务，任务在跑时两枚一起忙，续页也停下。 */
 function useFollowJob(props: FollowFeedProps, ready: boolean) {
   const { helpers, actions } = props;
   const [generation, setGeneration] = useState(0);
@@ -299,7 +297,8 @@ function useFollowJob(props: FollowFeedProps, ready: boolean) {
     setReport('');
     let started = false;
     try {
-      const job = await apiSend<{ job_id: string }>(FOLLOW_CHECK_URL, older ? { older: true, background: true } : { background: true });
+      const job = await apiSend<{ job_id: string }>(FOLLOW_CHECK_URL,
+        older ? { older: true, backfill_all: true, background: true } : { background: true });
       sessionStorage.setItem('peach-follow-job', job.job_id);
       started = true;
       setRunning(true);

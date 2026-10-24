@@ -205,21 +205,9 @@ def within_history(candidate: FollowCandidate, after: datetime | None) -> bool:
     return stamp is None or stamp >= after
 
 
-def history_window(candidates, after: datetime | None, floor: int = 0) -> tuple:
-    """有限历史范围内的条目；不足 `floor` 条时按列表顺序补入更早的，补满为止。
-
-    列表是新的在前，所以补进来的是边界之外最近的那几条。
-    """
-    within = sum(1 for candidate in candidates if within_history(candidate, after))
-    spare = max(0, floor - within)
-    kept = []
-    for candidate in candidates:
-        if within_history(candidate, after):
-            kept.append(candidate)
-        elif spare:
-            kept.append(candidate)
-            spare -= 1
-    return tuple(kept)
+def history_window(candidates, after: datetime | None) -> tuple:
+    """有限历史范围内的条目；边界为空就是不设范围。"""
+    return tuple(candidate for candidate in candidates if within_history(candidate, after))
 
 
 def _iso_utc(value: datetime) -> str:
@@ -477,18 +465,10 @@ class _BaseConnector:
         self.candidate_ready = None
         self.history_after = None
         self.history_skipped = 0
-        #: 首次采集的条数下限。边界之外最多放行这么多条，精确裁剪由 `run_check`
-        #: 按 `history_window` 做：连接器逐条判断时还不知道后面有几条落在边界内。
-        self.history_floor = 0
-        self._history_spares: set[str] = set()
 
     def within_history(self, candidate: FollowCandidate) -> bool:
+        """在历史边界内吗；边界外的不进候选，也就不花详情页的请求。"""
         if within_history(candidate, self.history_after):
-            return True
-        key = str(candidate.external_id)
-        if key in self._history_spares or len(self._history_spares) < self.history_floor:
-            # 同一条可能先在列表阶段、再在补全阶段各问一次，按 id 记住才不重复占名额。
-            self._history_spares.add(key)
             return True
         self.history_skipped += 1
         return False
