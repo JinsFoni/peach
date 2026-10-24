@@ -216,7 +216,7 @@ describe('画出什么', () => {
     expect(performerLine).not.toContain('事务所');
   });
 
-  it('发布账号在站上的简介与资料表排进资料卡，接在身材那一格下面', async () => {
+  it('发布账号在站上的资料表排进资料卡，简介另占一行排在头像下面', async () => {
     const host = await open(props({ kind: 'creator', name: 'mini diva', entity: {
       id: 1, canonical_name: 'mini diva', asset_count: 0,
       profile: {
@@ -232,10 +232,14 @@ describe('画出什么', () => {
     expect(rows).toEqual([['感情', '单身'], ['出生地', 'Czech Republic']]);
     // 每一项那枚字形与标签同一行，图标名由服务端定。
     expect(panel.querySelector('dt use')?.getAttribute('href')).toBe('#i-heart');
-    expect(panel.querySelector('[data-about-bio]')?.textContent).toBe(
-      '简介Love being here from time to time.');
+    // 简介不在读数那一块里，自己占卡里的一行。
+    const bio = host.querySelector('[data-entity-bio]')!;
+    expect(bio.textContent).toBe('简介Love being here from time to time.');
     // 标签与正文分两个盒子，正文才落进值那一列。
-    expect(panel.querySelector('[data-about-bio] b')?.nextElementSibling?.tagName).toBe('SPAN');
+    expect(bio.querySelector('b')?.nextElementSibling?.tagName).toBe('SPAN');
+    expect(bio.parentElement?.hasAttribute('data-entity-profile')).toBe(true);
+    expect(panel.contains(bio)).toBe(false);
+    expect(panel.compareDocumentPosition(bio) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // 身高与三围在名字下面「身材」那一格，不在资料表里再来一遍。
     const size = host.querySelector('[data-entity-size]')!;
     expect(size.textContent).toBe('身材T167 · B89 · W64 · H91');

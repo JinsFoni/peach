@@ -62257,7 +62257,11 @@ function nje({ kind: e, name: t, entity: n, feedNew: r, feedHost: i, actions: a,
 						children: /* @__PURE__ */ (0, C.jsx)($H, { row: e })
 					}, e.label))
 				}) : null,
-				d.items.length || d.bio ? /* @__PURE__ */ (0, C.jsx)(cje, { about: d }) : null
+				d.items.length ? /* @__PURE__ */ (0, C.jsx)(cje, { items: d.items }) : null,
+				d.bio ? /* @__PURE__ */ (0, C.jsxs)("p", {
+					"data-entity-bio": "",
+					children: [/* @__PURE__ */ (0, C.jsx)("b", { children: "简介" }), /* @__PURE__ */ (0, C.jsx)("span", { children: d.bio })]
+				}) : null
 			]
 		}), m.length ? /* @__PURE__ */ (0, C.jsx)("div", {
 			"data-entity-foot": "",
@@ -62474,14 +62478,11 @@ function QH({ label: e, names: t }) {
 		}, t))
 	})] });
 }
-function cje({ about: e }) {
-	return /* @__PURE__ */ (0, C.jsxs)("section", {
+function cje({ items: e }) {
+	return /* @__PURE__ */ (0, C.jsx)("section", {
 		"data-entity-about": "",
 		"aria-label": "站上资料",
-		children: [e.items.length ? /* @__PURE__ */ (0, C.jsx)("dl", { children: e.items.map((e) => /* @__PURE__ */ (0, C.jsxs)("div", { children: [/* @__PURE__ */ (0, C.jsxs)("dt", { children: [/* @__PURE__ */ (0, C.jsx)(BH, { name: e.glyph || "info" }), e.label] }), /* @__PURE__ */ (0, C.jsx)("dd", { children: e.value })] }, e.label)) }) : null, e.bio ? /* @__PURE__ */ (0, C.jsxs)("p", {
-			"data-about-bio": "",
-			children: [/* @__PURE__ */ (0, C.jsx)("b", { children: "简介" }), /* @__PURE__ */ (0, C.jsx)("span", { children: e.bio })]
-		}) : null]
+		children: /* @__PURE__ */ (0, C.jsx)("dl", { children: e.map((e) => /* @__PURE__ */ (0, C.jsxs)("div", { children: [/* @__PURE__ */ (0, C.jsxs)("dt", { children: [/* @__PURE__ */ (0, C.jsx)(BH, { name: e.glyph || "info" }), e.label] }), /* @__PURE__ */ (0, C.jsx)("dd", { children: e.value })] }, e.label)) })
 	});
 }
 function $H({ row: e }) {
