@@ -351,15 +351,16 @@
   gap: 6px 28px;
   margin: 0;
 }
-/* 这一块自己量宽度：够五列都留出两百多像素就一列三项往右排，卡不必为了十几项读数再长一截；
- * 窄下来放不下就退回按行铺开，值不至于挤成四五行。 */
+/* 这一块自己量宽度：够宽就一列三项往右排，卡不必为了十几项读数再长一截；窄下来放不下就退回
+ * 按行铺开。列宽按内容定：`auto` 先撑到那一列最长的一格，余下的宽度再均分给各列，留白的宽窄
+ * 跟着内容走，格子与格子之间始终是同一个间距；实在放不下就按词折行，不撑破卡。 */
 .peach-react [data-entity-about] { container-type: inline-size; }
 @container (min-width: 1080px) {
   .peach-react [data-entity-about] dl {
     grid-auto-flow: column;
     grid-template-rows: repeat(3, auto);
     grid-template-columns: none;
-    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-columns: auto;
   }
 }
 .peach-react [data-entity-about] dl > div {
