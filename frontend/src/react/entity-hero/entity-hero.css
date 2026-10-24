@@ -52,6 +52,12 @@
 #index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-facts]) {
   grid-template-columns: auto minmax(0, 1fr) minmax(280px, 360px);
 }
+/* 宽屏下每格点名：头像、身份、资料表在第一行，站上资料那一带从第二栏铺到卡右沿、换到第二行
+ * （ADR-0116）。逐格点名是必须的——留一个给自动排布，它会把这个跨栏的那一带塞到前面去。 */
+#index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-portrait-wrap] { grid-area: 1 / 1; }
+#index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-identity] { grid-area: 1 / 2; }
+#index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-facts] { grid-area: 1 / 3; }
+#index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-about] { grid-area: 2 / 2 / auto / -1; }
 
 /* ── 头像 ──
  * 外面这一层只为换头像那枚加号存在：圆框自己是 `overflow:hidden`，贴在它边上的按钮放进去就没了。
@@ -173,7 +179,7 @@
 .peach-react [data-meta-item="classification"] { white-space: nowrap; flex: none; }
 .peach-react [data-meta-item="names"] { flex-wrap: wrap; }
 .peach-react [data-meta-item] > svg,
-.peach-react [data-entity-facts] dt svg {
+.peach-react :is([data-entity-facts], [data-entity-size]) dt svg {
   width: 16px;
   height: 16px;
   flex: none;
@@ -280,6 +286,16 @@
   line-height: 22px;
   text-align: left;
 }
+/* 身材那一行跟在名字下面（ADR-0116），与资料表同一副脸：一格图标、一格取值，只是不隔竖线。 */
+.peach-react [data-entity-size] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 16px;
+  margin: 10px 0 0;
+  font-size: var(--fs-sm);
+  line-height: 22px;
+  text-align: left;
+}
 /* 内容区不到 900px 时排到身份信息下面，隔的线换成横的。 */
 #index:not([data-hero-wide]) .peach-react [data-entity-facts] {
   grid-column: 1 / -1;
@@ -287,7 +303,7 @@
   border-top: 1px solid var(--line-soft);
   border-left: 0;
 }
-.peach-react [data-entity-facts] dt {
+.peach-react :is([data-entity-facts], [data-entity-size]) dt {
   display: flex;
   align-items: center;
   align-self: start;
@@ -295,23 +311,33 @@
   color: var(--muted);
   white-space: nowrap;
 }
-.peach-react [data-entity-facts] dd { min-width: 0; margin: 0; color: var(--ink); overflow-wrap: anywhere; }
-.peach-react [data-entity-facts] :is([data-fact-tone="num"], dd[data-fact="num"]) { font-variant-numeric: tabular-nums; }
-.peach-react [data-entity-facts] [data-fact-tone="sub"] { color: var(--muted); }
-.peach-react [data-entity-facts] dd[data-fact="clip"] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* ── 站上资料（ADR-0115）──
+.peach-react :is([data-entity-facts], [data-entity-size]) dd { min-width: 0; margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.peach-react :is([data-entity-facts], [data-entity-size]) :is([data-fact-tone="num"], dd[data-fact="num"]) { font-variant-numeric: tabular-nums; }
+.peach-react :is([data-entity-facts], [data-entity-size]) [data-fact-tone="sub"] { color: var(--muted); }
+.peach-react :is([data-entity-facts], [data-entity-size]) dd[data-fact="clip"] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ── 站上资料（ADR-0115、ADR-0116）──
  * 发布账号的身份在站上：一段简介加一张资料表（感情、取向、出身地、体重、纹身……）。这些读数
- * 够写十几行，放进卡里那一栏会把卡撑得比这一页的主角还高，所以排在卡下面按列铺开：宽度够了
- * 自动并成两列以上，一行一个「图标 标签 值」。标签栏按最长的那条（四个字，如「勾起性欲」）
- * 留够，每一格的值连同换行后的续行都从同一条竖线上起头；站上来了更长的标签，那一格自己撑宽，
- * 值跟着让开，不叠上去。 */
+ * 排在卡里名字那一列下面、按列铺开，一行一个「图标 标签 值」；内容区窄下来就跟身份信息一起
+ * 排到头像那一行下面。标签栏按最长的那条（四个字，如「勾起性欲」）留够，每一格的值连同换行后的
+ * 续行都从同一条竖线上起头；站上来了更长的标签，那一格自己撑宽，值跟着让开，不叠上去。 */
 .peach-react [data-entity-about] {
   --about-glyph: 22px; /* 图标 16 加它与标签之间的 6 */
   --about-label: calc(var(--about-glyph) + 4em);
-  margin: 0 0 22px;
+  grid-column: 2 / -1;
+  align-self: start;
+  justify-self: stretch;
+  margin: 0;
   color: var(--ink);
   font-size: var(--fs-sm);
   line-height: 22px;
+  text-align: left;
+}
+/* 内容区不到 900px 时头像与名字并成一排，资料接在下一行，隔一道横线。 */
+#index:not([data-hero-wide]) .peach-react [data-entity-about] {
+  grid-column: 1 / -1;
+  grid-row: auto;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--line-soft);
 }
 .peach-react [data-entity-about] dl {
   display: grid;
@@ -714,6 +740,13 @@
   }
   .peach-react [data-namepick-menu] [role^="menuitem"] { min-height: 44px; }
   .peach-react [data-entity-alias] { margin-bottom: 10px; }
+  /* 单列居中，身材那只剩一段读数，跟着居中才不落在居中的计数左边。 */
+  .peach-react [data-entity-size] {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px 16px;
+  }
   .peach-react :is([data-entity-alias="meta"], [data-meta-item="names"]) { justify-content: center; }
   /* 外链窄屏下横滚，不换行。居中写 `safe center`：装不下时贴左，溢出的那几条才滑得到。滚动的
    * 那一层顶到卡的左右边，切口落在卡沿；上下各让出 4px 给焦点环。 */
