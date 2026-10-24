@@ -13656,7 +13656,7 @@ function cc(e, t) {
 	let n = parseFloat(e.dataset[t] ?? "");
 	return Number.isFinite(n) ? n : null;
 }
-var lc = ".pic>img.poster,[data-media-art]>img,.ring>img,[data-tier-ring]>img,[data-person-ring]>img,[data-entity-portrait]>img,[data-hero-ring]>img", uc = /* @__PURE__ */ new WeakMap();
+var lc = ".pic>img.poster,[data-media-pic]>img,[data-media-art]>img,.ring>img,[data-tier-ring]>img,[data-person-ring]>img,[data-entity-portrait]>img,[data-hero-ring]>img", uc = /* @__PURE__ */ new WeakMap();
 function dc(e) {
 	let t = e.matches(lc) ? [e] : e.querySelectorAll(lc);
 	for (let e of t) !e.complete && e.parentElement && (e.parentElement.classList.add("imgwait"), uc.set(e.parentElement, performance.now()));

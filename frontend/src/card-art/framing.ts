@@ -185,8 +185,11 @@ export function coverFace(img: HTMLImageElement, axis: 'cx' | 'cy'): number | nu
    收尾后类名一并摘掉：没到门槛就到手的直接摘，淡出过的等淡出完再摘，封面上平时不留
    那层 `::after`。React 索引页的头像框（`[data-person-ring]`）与资料卡的大位、同台艺人
    （`[data-entity-portrait]`、`[data-hero-ring]`）里那张图同样由这一层拼，插进页面时照样
-   被这里看见。 */
-const PENDING_IMAGES = '.pic>img.poster,[data-media-art]>img,.ring>img,[data-tier-ring]>img,[data-person-ring]>img,[data-entity-portrait]>img,[data-hero-ring]>img';
+   被这里看见。
+
+   卡面的封面（`[data-media-pic] > img`）也算在内：那一格的底色是黑的，封面还在路上时
+   没有这层微光就是一块黑，四十张一起取的时候尤其明显。 */
+const PENDING_IMAGES = '.pic>img.poster,[data-media-pic]>img,[data-media-art]>img,.ring>img,[data-tier-ring]>img,[data-person-ring]>img,[data-entity-portrait]>img,[data-hero-ring]>img';
 const pendingSince = new WeakMap<Element, number>();
 
 /** 插进页面时还没到手的图，在框上标 `imgwait`。 */
