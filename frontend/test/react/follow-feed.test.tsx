@@ -186,13 +186,30 @@ describe('媒体与一叠', () => {
 });
 
 describe('底栏与排序', () => {
-  it('往回抓到第几页：页码从 0 起，给人读的从 1 起', () => {
+  it('历史深度：页码从 0 起，给人读的从 1 起', () => {
     expect(backfillState([source(1, 'a', { can_backfill: false })])).toBe('');
     expect(backfillState([source(1, 'a', { can_backfill: true, backfill_page: 0 })])).toBe('每个来源都只抓了第 1 页');
     expect(backfillState([source(1, 'a', { can_backfill: true, backfill_page: 2 })])).toBe('每个来源都抓到第 3 页');
     expect(backfillState([
       source(1, 'a', { can_backfill: true, backfill_page: 0 }), source(2, 'b', { can_backfill: true, backfill_page: 2 }),
     ])).toBe('已抓到第 1–3 页');
+  });
+
+  it('「抓全部历史」在页头，跟检查更新摆在一起；底栏只留加载更多', async () => {
+    serve(feed([group(item(1))], { has_more: true, sources: [source(1, 'kou', { can_backfill: true, backfill_page: 0 })] }));
+    const host = await open(props());
+    const head = host.querySelector('[data-follow-head]');
+    expect(head?.querySelector('[data-follow-older]')?.textContent).toBe('抓全部历史');
+    expect(head?.querySelector('[data-follow-backfill]')?.textContent).toBe('每个来源都只抓了第 1 页');
+    expect(head?.querySelector('[data-follow-recheck]')).not.toBeNull();
+    expect(host.querySelector('[data-follow-pagination] [data-follow-older]')).toBeNull();
+  });
+
+  it('没有来源能往回翻时不摆「抓全部历史」', async () => {
+    serve(feed([group(item(1))], { sources: [source(1, 'kou', { can_backfill: false })] }));
+    const host = await open(props());
+    expect(host.querySelector('[data-follow-older]')).toBeNull();
+    expect(host.querySelector('[data-follow-backfill]')).toBeNull();
   });
 
   it('点别的列从默认方向起，点生效那列翻方向；无障碍名称播报点下去会得到什么', () => {
@@ -493,7 +510,7 @@ describe('页面', () => {
     expect(fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/follow?')).length).toBeGreaterThan(reads);
   });
 
-  it('往回抓一页带上 older，跑完之前那枚键一直写「抓取中」', async () => {
+  it('「抓全部历史」带上 older 与 backfill_all，跑完之前那枚键一直写「抓取中」', async () => {
     const fetcher = serve(feed([group(item(1))], { sources: [source(1, 'kou', { can_backfill: true, backfill_page: 1 })] }),
       { body: { job_id: 'job-3', status: 'running' } });
     const given = props();
@@ -501,7 +518,7 @@ describe('页面', () => {
     await click(host.querySelector('[data-follow-older]'));
     await settle();
     const start = fetcher.mock.calls.find(([url, init]) => url === '/api/follow/check' && init?.method === 'POST');
-    expect(JSON.parse(String(start?.[1]?.body))).toEqual({ older: true, background: true });
+    expect(JSON.parse(String(start?.[1]?.body))).toEqual({ older: true, backfill_all: true, background: true });
     const options = (given.helpers.jobProgress as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0];
     expect(host.querySelector('[data-follow-older]')?.textContent).toContain('抓取中');
     expect(host.querySelector('[data-follow-older]')?.getAttribute('aria-busy')).toBe('true');

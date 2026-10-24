@@ -15,9 +15,10 @@
 .peach-react [data-follow-feed] { padding: 4px 0 42px; font: var(--board-body); }
 .peach-react [data-follow-head] {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 10px 14px;
   margin-bottom: 20px;
 }
 /* 页头复用全站页面标题的字号与行高。 */
@@ -25,8 +26,18 @@
 @media (max-width: 760px) {
   .peach-react [data-follow-title] { font: var(--board-figure); }
 }
-.peach-react [data-follow-head-actions] { display: inline-flex; flex: none; align-items: center; gap: 8px; }
-/* 「管理关注」「抓更早的一页」同遗留层 `.fbtn`：左边留 12px，图标 14px，与文字隔 4px（文字自带的内边距）。 */
+/* 页头上这一排窄屏放不进一行：整排换到标题下面，里面再按需要折行，页面不出横向滚动。 */
+.peach-react [data-follow-head-actions] {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+}
+/* 「管理关注」「抓全部历史」同遗留层 `.fbtn`：左边留 12px，图标 14px，与文字隔 4px（文字自带的内边距）。 */
 .peach-react button:is([data-follow-manage], [data-follow-older]):has(> svg) { gap: 0; padding-left: 12px; }
 .peach-react button:is([data-follow-manage], [data-follow-older]) > svg { width: 14px; height: 14px; }
 
@@ -254,14 +265,15 @@
 /* 忙态里转圈与「抓取中…」隔开 4px，同遗留层 `.fbtn` 的间距。 */
 .peach-react :is([data-follow-older], [data-follow-recheck]) > span { gap: 4px; }
 /* 任务在跑时两枚键只标 `aria-busy`，重复点击由 `start` 拦住：「检查更新」保持主键那块蓝，
-   「抓更早的一页」铺遗留层次级键的忙态面（`--ground` 底、`--line` 边、`--muted` 字、不带影），悬停也不变。 */
+   「抓全部历史」铺遗留层次级键的忙态面（`--ground` 底、`--line` 边、`--muted` 字、不带影），悬停也不变。 */
 .peach-react button[data-follow-older][aria-busy] {
   border-color: var(--line);
   background: var(--ground);
   color: var(--muted);
   box-shadow: none;
 }
-.peach-react [data-follow-backfill] { color: var(--muted); font: var(--board-compact); }
+/* 标题旁那句来源状态：贴着标题往左，动作那一排留在右边。 */
+.peach-react [data-follow-backfill] { margin-right: auto; color: var(--muted); font: var(--board-compact); }
 
 /* ── 列表 ── */
 .peach-react [data-follow-list] {

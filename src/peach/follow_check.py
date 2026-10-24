@@ -17,15 +17,12 @@ from typing import Mapping
 from . import follow_providers
 from .follow import FollowHistoryEnd, FollowSourceError, FollowSourceRateLimited
 from .follow_secrets import CredentialError
-from .follow_sources import SourceFetch, enrichment_mark, history_window, published_stamp
+from .follow_sources import SourceFetch, enrichment_mark, history_window
 from .follow_store import RecordOutcome
 
-#: 新来源首次采集至少收下多少条。历史范围只按天数算时，更新稀疏的作者一条都
-#: 进不来；按条数又会让高产作者一下子塞满未看。取 30：大约一屏，kemono 一页 50
-#: 条不必翻页，rule34video（一页 24）、fanbox（一页 10）翻一两页就够。
-INITIAL_HISTORY_FLOOR = 30
-#: 为补足下限最多往前翻几页。每页都是真实请求，下限不值得拿无界的翻页去换。
-MAX_FLOOR_PAGES = 5
+#: 首次采集为凑齐采集范围最多往前翻几页。每页都是真实请求：范围不限时要一路翻到
+#: 站点说没有更早的，这本该没有尽头，这一条只是给分页失控的站点留个刹车。
+MAX_HISTORY_PAGES = 200
 _BACKFILL_PROVIDERS = follow_providers.backfill_providers()
 
 
@@ -113,9 +110,12 @@ def run_check(row: Mapping, *, credentials, writer, connector_factory,
     provider, ref = str(row["provider"]), str(row["ref"])
     page = (int(row["backfill_page"] or 0) + 1) if older else 0
     metadata = json.loads(row.get("metadata_json") or '{}')
+    #: 早先按「至少收几条」补过内容、因此漏掉首页若干条的那些来源：往回翻之前先把首页重走一遍。
     replay_first = older and bool(metadata.get('initial_history_first_page_pending'))
     if replay_first:
         page = 0
+    #: 首次采集：这条来源还没按采集范围收过一轮，这一趟要一路翻到范围尽头。
+    first = not older and not row.get('last_checked_at')
     base = {"source_id": source_id, "provider": provider, "ref": ref,
             "label": str(row["label"] or ""), "page": page, "older": older}
     remaining = cooldown.cooling(provider) if cooldown is not None else 0
@@ -123,8 +123,8 @@ def run_check(row: Mapping, *, credentials, writer, connector_factory,
         return CheckResult(**base, ok=False, status="error",
                            error=f"{provider} 限流冷却中，{int(remaining) + 1} 秒后再试，本次跳过")
     force = bool(row.get("force_media_reparse")) or replay_first
-    cutoff, floor = _history_limits(row, metadata, writer, moment,
-                                    older=older, initial_days=initial_days)
+    cutoff = _history_cutoff(row, metadata, writer, moment,
+                             older=older, initial_days=initial_days)
     recorder = _PageRecorder(row, writer, moment, cutoff)
     try:
         connector = build_connector_for(
@@ -132,7 +132,6 @@ def run_check(row: Mapping, *, credentials, writer, connector_factory,
             enrich_skip=frozenset(row.get("enrich_skip") or ()))
         connector.history_after = cutoff
         connector.history_skipped = 0
-        connector.history_floor = floor
         connector.candidate_ready = recorder.publish
         if progress is not None:
             connector.progress = progress
@@ -151,20 +150,18 @@ def run_check(row: Mapping, *, credentials, writer, connector_factory,
     except FollowSourceError as error:
         _pause_if_rate_limited(cooldown, provider, error)
         return _record_failure(writer, base, error, moment, "error")
-    candidates = history_window(fetch.candidates, cutoff, floor)
+    candidates = history_window(fetch.candidates, cutoff)
     history_skipped = getattr(connector, 'history_skipped', 0) + len(fetch.candidates) - len(candidates)
     fetch = replace(fetch, candidates=candidates)
     with writer() as store:
-        if not fetch.not_modified:
-            if replay_first:
-                store.merge_source_metadata(source_id, {'initial_history_first_page_pending': False}, moment)
-            elif history_skipped and page == 0 and 'initial_history_first_page_pending' not in metadata:
-                store.merge_source_metadata(source_id, {'initial_history_first_page_pending': True}, moment)
+        if not fetch.not_modified and replay_first:
+            store.merge_source_metadata(source_id, {'initial_history_first_page_pending': False}, moment)
         outcome = recorder.record_in(store, fetch, page)
-    if floor and not fetch.not_modified:
-        recorder.cutoff = None
-        fetch, outcome = _fill_floor(row, connector, writer, fetch, outcome, cutoff, floor, moment,
-                                     recorder=recorder)
+    if first and not fetch.not_modified:
+        if provider in _BACKFILL_PROVIDERS:
+            fetch, outcome, skipped = _collect_range(row, connector, writer, fetch, outcome,
+                                                     cutoff, moment, recorder=recorder)
+            history_skipped += skipped
     with writer() as store:
         learned = store.learn_official_author_alias(provider, ref, fetch.candidates)
     return CheckResult(**base, fetch=fetch, outcome=outcome,
@@ -177,63 +174,68 @@ def _pause_if_rate_limited(cooldown, provider: str, error: FollowSourceError) ->
         cooldown.pause(provider, error.retry_after)
 
 
-def _history_limits(row, metadata: dict, writer, moment: datetime, *,
-                    older: bool, initial_days: int) -> tuple[datetime | None, int]:
-    """这次检查的历史边界与条数下限；新来源首次检查时把两者固定进 metadata。
+def _history_cutoff(row, metadata: dict, writer, moment: datetime, *,
+                    older: bool, initial_days: int) -> datetime | None:
+    """这次检查的历史边界；新来源首次检查时把边界固定进 metadata。
 
-    重试和自动更新沿用固定下来的值，不按当时的设置重算。往回翻页不设边界。
+    边界是「采集那一刻往前 N 天」这个确切时刻，不跟着收到的作品日期滑动：某条作品
+    发得早一点不该把整个来源的边界一起拖下去。重试和自动更新沿用固定下来的值，
+    不按当时的设置重算。范围不限时固定成空串，即不设边界；往回翻页也不设边界。
     """
     history_after = metadata.get('initial_history_after')
-    floor = int(metadata.get('initial_history_floor') or 0)
     if 'initial_history_after' not in metadata and not row.get('last_checked_at'):
         history_after = ((moment - timedelta(days=initial_days)).isoformat()
                          if initial_days and not older else '')
-        floor = INITIAL_HISTORY_FLOOR if history_after else 0
         with writer() as store:
-            store.merge_source_metadata(int(row["id"]), {'initial_history_after': history_after,
-                                                         'initial_history_floor': floor}, moment)
+            store.merge_source_metadata(int(row["id"]), {'initial_history_after': history_after}, moment)
     if not history_after or older:
-        return None, 0
-    return datetime.fromisoformat(history_after), floor
+        return None
+    return datetime.fromisoformat(history_after)
 
 
-def _fill_floor(row, connector, writer, fetch, outcome, cutoff, floor, moment, *, recorder):
-    """首次采集不足下限时往前翻页补足，再把边界挪到实际收下的最早一条。
+def _collect_range(row, connector, writer, fetch, outcome, cutoff, moment, *, recorder):
+    """首次采集按采集范围翻页：范围内的作品一条不少，范围外的连一页都不多取。
 
-    往前翻的页整页收下，回填游标因此和「已经抓到第几页」一致，之后手动加载更早
-    接着往前走，不会漏掉半页。边界跟着挪，是为了之后的常规检查仍把这些条目
-    算在范围内，不在每次检查里重复报「跳过」。
+    - 范围不限：一直翻到站点说没有更早的为止。
+    - 按天数：翻到某一页整页都早于边界为止，那页之后全在范围外。
+    - 范围里一条都没有就是没有：范围由用户定，不拿「至少给几条」的兜底去顶替它。
+
+    往后翻的页整页落库，回填游标因此与「已经抓到第几页」一致，之后手动抓更早
+    接着往前走，不会漏掉半页。
     """
-    source_id, provider, ref = int(row["id"]), str(row["provider"]), str(row["ref"])
-    kept = list(fetch.candidates)
+    source_id = int(row["id"])
+    ref = str(row["ref"])
     totals = {"discovered": outcome.discovered, "added": outcome.added, "updated": outcome.updated}
     counts = {"skipped": fetch.skipped, "skipped_compilations": fetch.skipped_compilations,
               "probed": fetch.probed}
+    skipped = 0
+    kept = list(fetch.candidates)
     page = 0
-    connector.history_after = None
-    while len(kept) < floor and provider in _BACKFILL_PROVIDERS and page < MAX_FLOOR_PAGES:
+    while kept and page < MAX_HISTORY_PAGES:
         page += 1
         try:
             more = connector.fetch(ref, etag=None, last_modified=None, page=page)
         except FollowHistoryEnd:
+            with writer() as store:
+                store.record_history_end(source_id, moment)
             break
         except (CredentialError, FollowSourceError):
-            # 首页已经落库，补页失败只是这次补得少，之后手动加载更早还能接着翻。
+            # 已经收下的页照常落库，剩下的更早内容留给下一次检查接着翻。
             break
-        extra = recorder.record(more, page)
-        kept.extend(more.candidates)
+        within = history_window(more.candidates, cutoff)
+        skipped += len(more.candidates) - len(within)
+        extra = recorder.record(replace(more, candidates=within), page)
         for key in totals:
             totals[key] += getattr(extra, key)
         for key in counts:
             counts[key] += getattr(more, key)
-    stamps = [stamp for stamp in map(published_stamp, kept) if stamp is not None]
-    patch = {'initial_history_floor': 0}
-    if stamps and min(stamps) < cutoff:
-        patch['initial_history_after'] = min(stamps).isoformat()
-    with writer() as store:
-        store.merge_source_metadata(source_id, patch, moment)
+        kept.extend(within)
+        if not within:
+            break  # 整页都在边界之外，或者站点给了空页：到此为止
+        if getattr(connector, 'progress', None) is not None:
+            connector.progress(page=page)
     return (replace(fetch, candidates=tuple(kept), **counts),
-            replace(outcome, **totals))
+            replace(outcome, **totals), skipped)
 
 
 def _record_failure(writer, base: dict, error: Exception, moment: datetime,

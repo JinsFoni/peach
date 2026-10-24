@@ -393,9 +393,9 @@ export function followStack({ cover = '', coverFace = null, stack = null, imageV
   return { isMix: Boolean(label), label, glyph, faces: faces.length > 1 ? faces.slice(0, limit) : [] };
 }
 
-/* ── 往回抓 ──
-   往回抓到哪儿了。不说的话，用户点一次只看到列表变长一点，不知道自己走到第几页，也不知道还要点
-   几次。页码是 0 起的游标（0 = 只抓过第一页），显示成人读的第几页。 */
+/* ── 历史深度 ──
+   每个来源的游标走到第几页。「抓全部历史」一次翻到底，这一行说明现在到哪儿了。
+   页码是 0 起的游标（0 = 只抓过第一页），显示成人读的第几页。 */
 export function backfillState(sources: readonly FollowSource[]): string {
   const pages = sources.filter((source) => source.can_backfill).map((source) => (source.backfill_page || 0) + 1);
   if (!pages.length) return '';

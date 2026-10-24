@@ -2041,11 +2041,11 @@ def w_follow_check(contract, body) -> dict:
     没有 `source` 就检查全部已启用来源。逐个来源独立成败：一个来源缺凭据或被
     机器人验证挡住，不该让其余来源的更新一起消失。
 
-    翻页只有 `older` 一个开关：常规检查只看第一页，`older` 从游标往前抓一页，界面上
-    「抓更早的一页」就是它。`backfill_all` 与 `rewind` 只跟着 `older` 生效，是存量行
-    重抓的运维入口、不进界面：前者一页记完接着抓到尽头，后者把这一轮的起点拨回第
-    1 页。连接器新学到一个字段（图片宽高、封面）之后，已经入库的旧行要靠这一组参数
-    重走一遍才补得上，做法见 `docs/REUSE.md`「关注检查」一条。
+    翻页只有 `older` 一个开关：常规检查只看第一页，`older` 从回填游标往前翻。界面上的
+    「抓全部历史」带的是 `older` 加 `backfill_all`：一路翻到站点说没有更早的为止，一次
+    到底。`rewind` 是存量行的运维入口、不进界面：把这一轮的起点拨回第 1 页。连接器新
+    学到一个字段（图片宽高、封面）之后，已经入库的旧行要靠这一组参数重走一遍才补得上，
+    做法见 `docs/REUSE.md`「关注检查」一条。
     """
     if "sources" in body and (not isinstance(body["sources"], list)
             or not body["sources"] or not all(type(value) is int for value in body["sources"])):
@@ -2203,9 +2203,13 @@ class _FollowCheckSession:
         current = {'source': row['id'], 'label': author_display_name(row),
                    'provider': PROVIDER_LABELS.get(row['provider'], row['provider'])}
         def progress(**fields):
-            if self.job_id:
-                self.contract.follow_job.update(self.job_id, total=len(self.rows), checked=len(self.results),
-                    results=self.results.copy(), current={**current, **fields})
+            if not self.job_id:
+                return
+            # 一趟里可能翻很多页：进度条要说清现在在第几页，而不是只转圈。
+            page = fields.pop('page', None)
+            label = current['label'] + (f' · 第 {page + 1} 页' if isinstance(page, int) and page else '')
+            self.contract.follow_job.update(self.job_id, total=len(self.rows), checked=len(self.results),
+                results=self.results.copy(), current={**current, **fields, 'label': label})
         progress(attempt=1, max_attempts=5, retry_in=0)
         _backfill_profile_links(row, self.credentials, self.writer)
         older = bool(self.body.get('older'))
@@ -2231,9 +2235,8 @@ def _run_follow_check(contract, body, job_id=None) -> dict:
     previous = (contract.follow_job.snapshot() or {}) if job_id else {}
     requested = body.get("source")
     source_id = requested if isinstance(requested, int) else None
-    # 往回抓一页。这是**显式的、一次一页**的动作：常规检查永远只看第一页，
-    # 因为追更关心的是增量；但那也意味着每个来源只有第一页那点内容
-    # （rule34video 的作者页一页 24 条，实际 61 页）。用户点一次，往前挪一页。
+    # 往回翻页。常规检查永远只看第一页，因为追更关心的是增量；每个来源因此只有
+    # 第一页那点内容（rule34video 的作者页一页 24 条，实际 61 页），更早的要显式去要。
     older = bool(body.get("older"))
     # rewind：从第 1 页重走一遍。回填游标是单向的（record 只进不退），走到尽头
     # 之后再想全量重抓就得把起点拨回页首；ledger 里的游标由 record 的 max() 守着，

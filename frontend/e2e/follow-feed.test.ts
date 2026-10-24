@@ -644,7 +644,7 @@ describe('关注页岛', () => {
     }
   });
 
-  it('检查更新与往回抓起同一趟任务，任务在跑时两枚键一起忙', { timeout: 60_000 }, async () => {
+  it('检查更新与抓全部历史起同一趟任务，任务在跑时两枚键一起忙', { timeout: 60_000 }, async () => {
     const opened = await openFollowFeed(browser, '/follow', DESKTOP);
     try {
       const page = opened.page;
@@ -653,7 +653,7 @@ describe('关注页岛', () => {
       await page.locator('[data-follow-older]').filter({ hasText: '抓取中' }).waitFor();
       assert.match(await page.locator('[data-follow-older]').innerText(), /抓取中/);
       await page.locator('[data-follow-recheck][aria-busy="true"]').waitFor();
-      assert.deepEqual(opened.stub.writes, [{ url: '/api/follow/check', body: { older: true, background: true } }]);
+      assert.deepEqual(opened.stub.writes, [{ url: '/api/follow/check', body: { older: true, backfill_all: true, background: true } }]);
       // 忙态包含请求中的阶段；任务编号在响应返回后写入。
       await page.waitForFunction(() => sessionStorage.getItem('peach-follow-job') === 'job-1',
         undefined, { timeout: 10_000 });
@@ -668,8 +668,8 @@ describe('关注页岛', () => {
       await page.locator('[data-follow-recheck]').click();
       await page.locator('[data-follow-recheck][aria-busy="true"]').waitFor();
       await page.locator('[data-follow-older][aria-busy="true"]').waitFor();
-      // 检查那一趟只让往回抓那枚忙、不换字。
-      assert.equal(await page.locator('[data-follow-older]').innerText(), '抓更早的一页');
+      // 检查那一趟只让那一枚忙、不换字。
+      assert.equal(await page.locator('[data-follow-older]').innerText(), '抓全部历史');
       assert.deepEqual(again.stub.writes, [{ url: '/api/follow/check', body: { background: true } }]);
       assert.deepEqual(again.problems, []);
     } finally {

@@ -60279,9 +60279,20 @@ function Qke(e) {
 			"data-follow-feed": "",
 			"data-select-mode": e.selectMode ? "" : void 0,
 			children: [
-				/* @__PURE__ */ (0, C.jsx)(mH, {
+				/* @__PURE__ */ (0, C.jsxs)(mH, {
 					onManage: i.openManage,
-					children: d.sources.length ? /* @__PURE__ */ (0, C.jsx)(q, {
+					meta: y ? Si(d.sources) : "",
+					children: [y ? /* @__PURE__ */ (0, C.jsx)(q, {
+						variant: "secondary",
+						leadingIcon: h.olderBusy ? void 0 : Yke,
+						"data-follow-older": "",
+						"aria-busy": h.busy || void 0,
+						onClick: () => void h.start(!0),
+						children: h.olderBusy ? /* @__PURE__ */ (0, C.jsxs)(C.Fragment, { children: [/* @__PURE__ */ (0, C.jsx)("span", {
+							className: "contents",
+							dangerouslySetInnerHTML: { __html: Ao("抓取中") }
+						}), /* @__PURE__ */ (0, C.jsx)("span", { children: "抓取中…" })] }) : "抓全部历史"
+					}) : null, d.sources.length ? /* @__PURE__ */ (0, C.jsx)(q, {
 						variant: "primary",
 						"data-follow-recheck": "",
 						"aria-label": "检查每个来源的更新",
@@ -60291,7 +60302,7 @@ function Qke(e) {
 							className: "contents",
 							dangerouslySetInnerHTML: { __html: Ao("检查中") }
 						}) : "检查更新"
-					}) : null
+					}) : null]
 				}),
 				/* @__PURE__ */ (0, C.jsx)(tAe, {
 					facets: d,
@@ -60338,9 +60349,9 @@ function Qke(e) {
 					context: u,
 					props: e
 				}, a.queryKey.join("\0")),
-				c.has_more || y ? /* @__PURE__ */ (0, C.jsxs)("div", {
+				c.has_more ? /* @__PURE__ */ (0, C.jsx)("div", {
 					"data-follow-pagination": "",
-					children: [c.has_more ? /* @__PURE__ */ (0, C.jsx)("span", {
+					children: /* @__PURE__ */ (0, C.jsx)("span", {
 						"data-follow-page-action": "",
 						children: c.groups.length < 500 ? /* @__PURE__ */ (0, C.jsxs)(oz, {
 							entity: !0,
@@ -60356,44 +60367,35 @@ function Qke(e) {
 								!h.busyRef.current && !o.isFetchingNextPage && o.fetchNextPage();
 							}
 						})
-					}) : null, y ? /* @__PURE__ */ (0, C.jsxs)("span", {
-						"data-follow-page-action": "",
-						children: [/* @__PURE__ */ (0, C.jsx)(q, {
-							variant: "secondary",
-							leadingIcon: h.olderBusy ? void 0 : Yke,
-							"data-follow-older": "",
-							"aria-busy": h.busy || void 0,
-							onClick: () => void h.start(!0),
-							children: h.olderBusy ? /* @__PURE__ */ (0, C.jsxs)(C.Fragment, { children: [/* @__PURE__ */ (0, C.jsx)("span", {
-								className: "contents",
-								dangerouslySetInnerHTML: { __html: Ao("抓取中") }
-							}), /* @__PURE__ */ (0, C.jsx)("span", { children: "抓取中…" })] }) : "抓更早的一页"
-						}), /* @__PURE__ */ (0, C.jsx)("span", {
-							"data-follow-backfill": "",
-							children: Si(d.sources)
-						})]
-					}) : null]
+					})
 				}) : null
 			]
 		})
 	] });
 }
-function mH({ onManage: e, children: t }) {
+function mH({ onManage: e, meta: t, children: n }) {
 	return /* @__PURE__ */ (0, C.jsxs)("div", {
 		"data-follow-head": "",
-		children: [/* @__PURE__ */ (0, C.jsx)("h2", {
-			"data-follow-title": "",
-			children: "关注"
-		}), /* @__PURE__ */ (0, C.jsxs)("span", {
-			"data-follow-head-actions": "",
-			children: [/* @__PURE__ */ (0, C.jsx)(q, {
-				variant: "secondary",
-				leadingIcon: Jke,
-				"data-follow-manage": "",
-				onClick: e,
-				children: "管理关注"
-			}), t]
-		})]
+		children: [
+			/* @__PURE__ */ (0, C.jsx)("h2", {
+				"data-follow-title": "",
+				children: "关注"
+			}),
+			t ? /* @__PURE__ */ (0, C.jsx)("span", {
+				"data-follow-backfill": "",
+				children: t
+			}) : null,
+			/* @__PURE__ */ (0, C.jsxs)("span", {
+				"data-follow-head-actions": "",
+				children: [/* @__PURE__ */ (0, C.jsx)(q, {
+					variant: "secondary",
+					leadingIcon: Jke,
+					"data-follow-manage": "",
+					onClick: e,
+					children: "管理关注"
+				}), n]
+			})
+		]
 	});
 }
 function $ke({ busy: e, error: t, load: n }) {
@@ -60454,6 +60456,7 @@ function eAe(e, t) {
 			try {
 				let n = await U(Fn, e ? {
 					older: !0,
+					backfill_all: !0,
 					background: !0
 				} : { background: !0 });
 				sessionStorage.setItem("peach-follow-job", n.job_id), t = !0, s(!0), e && p(!0), a((e) => e + 1);
