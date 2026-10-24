@@ -69,11 +69,11 @@
 #index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-facts]) > [data-entity-about] {
   grid-area: 2 / 2 / auto / -1;
 }
-/* 站上资料与身份同处一行时，两栏按基线对齐：读数第一行的字与名字同一基线，身份那一栏因此
- * 升到卡里内容的上沿。两栏各三行，右边行距取左边三行的基线间距，第二、三行依次对上计数与
- * 身材。女优页另占一行那张资料表不在此列，站上资料照旧贴着自己那一行的顶。 */
-#index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-about]):not(:has(> [data-entity-facts])) > :is([data-entity-identity], [data-entity-about]) {
-  align-self: baseline;
+/* 站上资料与身份同处一行时，两栏一起在头像右边居中：身份那一栏本来就随行的 `align-items:
+ * center` 居中，资料表跟上，两块的中心落在同一条横线上。行盒与行距按三行铺开那一档调，
+ * 第二、三行依次对上计数与身材。女优页另占一行那张资料表不在此列。 */
+#index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-about]):not(:has(> [data-entity-facts])) > [data-entity-about] {
+  align-self: center;
 }
 #index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-bio] { grid-area: 2 / 1 / auto / -1; }
 #index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-facts]) > [data-entity-bio] {
@@ -373,10 +373,12 @@
     grid-template-rows: repeat(3, auto);
     grid-template-columns: none;
     grid-auto-columns: auto;
-    /* 行距取身份那三行的基线间距：名字占 32px 的行、计数 20px、身材 22px，三段之间隔 9px 与
-     * 10px，首尾两行的基线相距 31.5px，读数一行 22px 加这 9.5px 正好跟上。前两行差半像素，
-     * 第三行差一像素，肉眼看不出来。 */
+    /* 行距取身份那三行的基线间距：名字占 32px 的行、计数 20px、身材 22px，段间隔 9px 与 10px，
+     * 相邻两行的基线相距 31.5px 与 31px，读数一行 22px 加这 9.5px 正好跟上，第三行差半像素。
+     * 顶上那 9px 留给名字的行盒：24px 的字装在 32px 的行盒里，基线在盒顶下面 24.5px，读数一行
+     * 只有 22px、基线在 15.5px 处，留出这一段两块才一样高，居中之后第一行读数正对名字。 */
     row-gap: 9.5px;
+    padding-block-start: 9px;
   }
 }
 /* 一行里各格按顶对齐，不按基线：标签那格是 flex，它的基线取自第一个子项、也就是图标的底边，
