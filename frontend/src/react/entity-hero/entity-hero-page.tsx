@@ -2,8 +2,9 @@
  *
  * 资料卡按 Board 的 profile 卡排：一块 secondary 底、18px 圆角的卡，正文是头像加身份三行
  * （名字、别名与归属、外链），女优有资料时右边再加一栏资料表，同台艺人收进卡底那条色阶带——
- * 那是这个人的附注，不是这一页的正文。身材那一格跟名字、计数排在一起，发布账号在站上的简介与
- * 资料表接在它后面、同一列里按列铺开（ADR-0116）。卡外面的交集条、筛选条与内容区仍归壳。
+ * 那是这个人的附注，不是这一页的正文。身材那一格跟名字、计数排在一起，发布账号在站上的资料表
+ * 接在它后面、同一列里按列铺开，简介另占一行、排在头像下面（ADR-0116）。卡外面的交集条、筛选条
+ * 与内容区仍归壳。
  *
  * 头像、同台艺人的脸和新作卡是拼好的 HTML（大位与新作卡由壳给，同台艺人的脸取自 `@peach/card-art`）：
  * 取图失败时兜底链（`card-art/image-fallback.ts`）会把 `<img>`
@@ -108,7 +109,8 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
               ))}
             </dl>
           ) : null}
-          {about.items.length || about.bio ? <AboutPanel about={about} /> : null}
+          {about.items.length ? <AboutPanel items={about.items} /> : null}
+          {about.bio ? <p data-entity-bio=""><b>简介</b><span>{about.bio}</span></p> : null}
         </div>
         {costars.length ? (
           <div data-entity-foot="" aria-label="同台艺人">
@@ -288,24 +290,21 @@ function NameGroup({ label, names }: { label?: string; names: { name: string; re
   );
 }
 
-/** 发布账号在站上那一页：资料表按列铺开，简介收在末尾。
+/** 发布账号在站上那一页的读数：一格一个「图标 标签 值」，排在名字右边按列铺开。
  *
- *  这些读数（感情、取向、出身地、体重、纹身……）有十几行，排在资料卡里名字那一列下面，
- *  宽度够了就并成几列。 */
-function AboutPanel({ about }: { about: { bio: string; items: HeroAboutItem[] } }) {
+ *  这些读数（感情、取向、出身地、体重、纹身……）有十几行，宽度够了就并成几列、一列三项。
+ *  同一个人写在站上的简介不在这里，它另占卡里的一行（ADR-0116）。 */
+function AboutPanel({ items }: { items: HeroAboutItem[] }) {
   return (
     <section data-entity-about="" aria-label="站上资料">
-      {about.items.length ? (
-        <dl>
-          {about.items.map((item) => (
-            <div key={item.label}>
-              <dt><Glyph name={item.glyph || 'info'} />{item.label}</dt>
-              <dd>{item.value}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-      {about.bio ? <p data-about-bio=""><b>简介</b><span>{about.bio}</span></p> : null}
+      <dl>
+        {items.map((item) => (
+          <div key={item.label}>
+            <dt><Glyph name={item.glyph || 'info'} />{item.label}</dt>
+            <dd>{item.value}</dd>
+          </div>
+        ))}
+      </dl>
     </section>
   );
 }
