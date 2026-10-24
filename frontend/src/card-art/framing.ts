@@ -187,8 +187,8 @@ export function coverFace(img: HTMLImageElement, axis: 'cx' | 'cy'): number | nu
    （`[data-entity-portrait]`、`[data-hero-ring]`）里那张图同样由这一层拼，插进页面时照样
    被这里看见。
 
-   卡面的封面（`[data-media-pic] > img`）也算在内：封面还在路上时那一格只有底面色，
-   没有这层微光就只剩一块空面，四十张一起取的时候尤其明显。 */
+   卡面的封面（`[data-media-pic] > img`）也算在内：那一格的底色是黑的，封面还在路上时
+   没有这层微光就是一块黑，四十张一起取的时候尤其明显。 */
 const PENDING_IMAGES = '.pic>img.poster,[data-media-pic]>img,[data-media-art]>img,.ring>img,[data-tier-ring]>img,[data-person-ring]>img,[data-entity-portrait]>img,[data-hero-ring]>img';
 const pendingSince = new WeakMap<Element, number>();
 

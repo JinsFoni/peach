@@ -108,8 +108,8 @@
 /* 封面与头像还在路上：框上铺同一条微光，到手后淡出并糊掉，和换头像那一格
    （`reveal-skeleton`）同一形态。类名由 app.js 的 `watchPendingImages` 标、`settleImage`
    收。微光晚 180ms 才淡入，门槛与 `.skeleton-awaiting` 同一个数：本地图多半在这之前
-   就到了，那种一帧都不该看见它。底色垫 `--ground`：这条渐变本身是半透明的，得有实底
-   才铺得出层次。收尾那一段（`.ui-imgdone`）在 frontend/src/card-art/card-art.css。 */
+   就到了，那种一帧都不该看见它。底色垫 `--ground`，否则半透明的微光落在 `.pic` 的
+   黑底上只剩一片黑。收尾那一段（`.ui-imgdone`）在 frontend/src/card-art/card-art.css。 */
 .imgwait::after{content:'';position:absolute;inset:0;right:-200%;z-index:5;
   pointer-events:none;border-radius:inherit;
   background:linear-gradient(to right,var(--hover),var(--skeleton-sheen) 50%,var(--hover)) 0 0/50% 100%,
