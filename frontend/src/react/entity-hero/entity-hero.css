@@ -369,9 +369,12 @@
     grid-auto-columns: auto;
   }
 }
+/* 一行里各格按顶对齐，不按基线：标签那格是 flex，它的基线取自第一个子项、也就是图标的底边，
+ * 值跟着那条线走就比标签低三像素，整行还被撑高三像素。字号与行高处处相同，顶对齐就是同一条
+ * 基线；值折成两行时标签仍留在第一行。 */
 .peach-react [data-entity-about] dl > div {
   display: flex;
-  align-items: baseline;
+  align-items: start;
   gap: 6px;
   min-width: 0;
 }
