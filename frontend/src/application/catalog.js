@@ -3,7 +3,7 @@ import { CatalogController } from '../react/catalog-grid/catalog-controller';
 /* catalog 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { censorOn, preferencesState, refreshAll, replaceCatalogAddress, sidebarFacets, wireDrag } from './preferences.js';
 import { nextSortState } from './../sort-preferences';
-import { $, STATE_ROUTES, api, esc, firstGrapheme, isCatalogPath, leadingGraphemes } from '../core';
+import { $, STATE_ROUTES, api, entityPath, esc, firstGrapheme, isCatalogPath, leadingGraphemes } from '../core';
 import { barsContext, detailReturnBarsContext, notifyShell, pageOpens, runtimeConfigurable, selectMode, selected, state, writeShell } from './../shell/index';
 import { receiptsState } from './receipts.js';
 import { dropBars, fetchBars, fetchTopsPage } from './../catalog-bars';
@@ -269,6 +269,16 @@ export function tierStudio(x){
     logo:x.has_logo?logoUrl(x.k,'icon',x.logo_version):''};
 }
 
+/* 关注那一排的一格。去向跟搜索推荐同一条判据：绑定了实体的去她的资料页（地址用 id，名字换了地址不变），
+   还没绑定实体的（同名的那位正在等人确认）去关注页按这一位筛。头像与取不到时的首字母都由这一份给，
+   岛只管摆。 */
+export function tierFollowing(x){
+  const name=String(x.k||'');
+  const key=String(x.key||name);
+  return {key,name,initial:firstGrapheme(name),avatar:String(x.avatar||''),fallback:String(x.avatar_fallback||''),
+    href:x.entity_id?entityPath('creator',name,Number(x.entity_id)):`/follow?author=${encodeURIComponent(key)}`};
+}
+
 export function renderBarsLoading(filterState){
   if(catalogState.catalogFilterProps?.tiers)return;
   catalogState.barsRendered='';
@@ -287,14 +297,14 @@ export async function buildBars(){
   const context=currentBarsContext(),filterState=entityState.activeFilterState();
   const signature=JSON.stringify([context,filterState,state.state||'',state.seed||'',javActive()]);
   renderBarsLoading(filterState);
-  // 两个聚合查询互不依赖。冷启动各需约 1 秒，串行会让手机首屏白等；
+  // 这几份聚合查询互不依赖。冷启动各需约 1 秒，串行会让手机首屏白等；
   // 并行取回后再一次性绘制顶部与抽屉。
-  const [facetData,tops]=await getBarsData(context);
+  const [facetData,tops,following]=await getBarsData(context);
   if(requestSeq!==catalogState.barsRequestSeq)return;
   /* 口径和数据都和上一次一样时，画出来的是同一串 HTML。照样赋一次 innerHTML 只换来
      整排头像连 `<img>` 一起重建、重解一遍码，屏幕上就是白闪一下——这一排每一个都是
      一张图。比数据不比时间：详情看上十分钟再回来，取回的多半还是同一份。 */
-  const rendered=signature+'\n'+JSON.stringify([facetData,tops]);
+  const rendered=signature+'\n'+JSON.stringify([facetData,tops,following]);
   /* 顶上那几排原样留着；侧栏在中途换过页面（详情开了又关）时已收回到只剩导航，同一份分组推回去。 */
   if(rendered===catalogState.barsRendered){
     if(layoutState.sidebarCatalog)paintSidebar({content:layoutState.sidebarCatalog,filters:{...filterState}});
@@ -304,8 +314,8 @@ export async function buildBars(){
   if(context.type==='home')mediaState.facets=facetData;
   const topTags=facetData.tags||[];
 
-  /* 顶部三层：女优圆头像 / 厂牌 / 内容标签。代表作表只收真能取到头像的那些，筛法见
-     `frontend/src/card-art/representatives.ts`。 */
+  /* 顶部三层：女优圆头像 / 厂牌 / 内容标签，另加一排关注来源里的人。代表作表只收真能取到
+     头像的那些，筛法见 `frontend/src/card-art/representatives.ts`。 */
   rememberRepresentatives(tops.performers);
   rememberRepresentatives(tops.studios);
   // 「两排都空」现在只剩全库真的一个人都没有这一种：窄集合已经由 loadTops 退回全库口径。
@@ -327,7 +337,8 @@ export async function buildBars(){
   catalogState.catalogTagRows=appliedTags.concat(pickedTags,tagPool.filter(row=>!pickedKeys.has(row.k)))
     .map(row=>({k:row.k,label:tagLabel(row.k),n:row.n??null}));
   paintCatalogFilter({
-    tiers:{key:String(catalogState.barsRequestSeq),performers:tops.performers.map(tierPerformer),studios:tops.studios.map(tierStudio)},
+    tiers:{key:String(catalogState.barsRequestSeq),performers:tops.performers.map(tierPerformer),
+      studios:tops.studios.map(tierStudio),following:following.map(tierFollowing)},
     empty:emptyHome,tags:catalogTags(filterState),tagFirst:appliedTags.length+pickedTags.length,
     views:catalogState.catalogViews(),state:filterState.state||'',
   });

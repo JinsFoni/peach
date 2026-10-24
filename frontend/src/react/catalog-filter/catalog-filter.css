@@ -13,9 +13,10 @@
  * 浮层吸顶的范围是 `body` 整页，只裹着它自己的父元素一格都走不动。前两层的规则在
  * `web/css/03-filterbar.css`，岛的根用 `contents`。 */
 
-/* ── 两排头像 ──
+/* ── 三排头像 ──
  * 女优是竖排人像格：48px 圆头像在上、名字在下，格宽 76、圆角 12；厂牌是 40px 高的一枚，28px 圆标识在左、
- * 名字在右。两排都不描边，悬停铺 primary-hover。 */
+ * 名字在右。关注那一排跟女优同一个格子，只是排头多一枚「关注」的说明：圆头像认不出这是谁的人，
+ * 而它的邻居正好也是一排圆头像。三排都不描边，悬停铺 primary-hover。 */
 .peach-react [data-catalog-tiers] {
   position: relative;
   z-index: 1;
@@ -46,7 +47,7 @@
   }
 }
 
-.peach-react :is([data-tier-performer], [data-tier-studio]) {
+.peach-react :is([data-tier-performer], [data-tier-studio], [data-tier-following]) {
   flex: none;
   border-radius: 12px;
   background: transparent;
@@ -57,20 +58,20 @@
   transition: transform var(--lift-motion, var(--board-motion)),
     scale calc(var(--spring-press-ms) * 1ms) var(--spring-press), background-color .2s ease-out, color .2s ease-out;
 }
-.peach-react :is([data-tier-performer], [data-tier-studio]):hover {
+.peach-react :is([data-tier-performer], [data-tier-studio], [data-tier-following]):hover {
   background: var(--color-background-primary-hover);
   color: var(--color-text-primary);
 }
-.peach-react :is([data-tier-performer], [data-tier-studio]):active {
+.peach-react :is([data-tier-performer], [data-tier-studio], [data-tier-following]):active {
   scale: .96;
   transition: scale .06s ease-out;
 }
-.peach-react :is([data-tier-performer], [data-tier-studio]):focus-visible {
+.peach-react :is([data-tier-performer], [data-tier-studio], [data-tier-following]):focus-visible {
   outline: 2px solid var(--tungsten);
   outline-offset: 2px;
 }
 
-.peach-react [data-tier-performer] {
+.peach-react :is([data-tier-performer], [data-tier-following]) {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -78,6 +79,18 @@
   width: 76px;
   padding: 6px 4px;
   text-align: center;
+}
+
+/* 关注那一格是真链接：点开是她的资料页，中键与新标签页照常。 */
+.peach-react [data-tier-following] { text-decoration: none; }
+
+/* 排头那枚「关注」。不进格子：它说明的是这一排是什么，不是其中的一位，所以跟着名字那一行居中。 */
+.peach-react [data-tier-caption] {
+  flex: none;
+  align-self: center;
+  margin-right: 2px;
+  color: var(--color-text-tertiary);
+  font: var(--board-caption);
 }
 
 .peach-react [data-tier-studio] {

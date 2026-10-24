@@ -1,4 +1,4 @@
-/* 首页上方那一整块：两排头像（女优、厂牌），加一块两排的玻璃浮层（上排四枚视图与标签，下排读数、
+/* 首页上方那一整块：三排头像（女优、厂牌、关注），加一块两排的玻璃浮层（上排四枚视图与标签，下排读数、
  * 换一批、卡片版式与排序键），再加正文里网格上面那条交集条。
  *
  * 状态全在壳里：筛选、当前视图、排序、成员与读数都当 props 递进来，点下去的动作回壳，壳在发请求之前
@@ -19,8 +19,8 @@ import { useCatalogView } from '../catalog-grid/catalog-view';
 import { CatalogViewToggle } from '../catalog-grid/catalog-view-toggle';
 import { Combo, Segments, Shuffle, SortKeys } from '../entity-filter/entity-filter-page';
 import {
-  EMPTY_SLOTS, ROW_AHEAD, ROW_BATCH, ROW_FIRST, type CatalogFilterProps, type CatalogTag, type TierKind,
-  type TierPerformer, type TierStudio,
+  EMPTY_SLOTS, ROW_AHEAD, ROW_BATCH, ROW_FIRST, type CatalogFilterProps, type CatalogTag, type TierFollowing,
+  type TierKind, type TierPerformer, type TierStudio,
 } from './catalog-filter';
 
 /* 上一次写出去的读数。读数那一格每次取数都换成微光再建回来，靠它分清「换了个数」和「刚出现」：
@@ -119,13 +119,18 @@ function TagPill({ tag, onPress }: { tag: CatalogTag; onPress(tag: string): void
   );
 }
 
-/** 两排头像。空的一排仍占 28px，画出来就是一条什么都没有的空带，所以没人就不画那一排。 */
+/** 三排头像。空的一排仍占 28px，画出来就是一条什么都没有的空带，所以没人就不画那一排。
+ *
+ *  关注那一排只在有人被关注时出现，骨架不替它预占一格：预占的话，没有关注来源的人冷启动时会先看到
+ *  一排谁都没有的位置再消失一次。它摆在三排的末尾，晚到那一下长在下面，女优与厂牌两排不动。
+ *  这一排是入口不是名册：完整名单在关注管理里，这里按条目数给最多的那几位。 */
 function Tiers(props: CatalogFilterProps) {
   const { actions, helpers } = props;
-  const tiers = props.tiers ?? { key: '', performers: [], studios: [] };
+  const tiers = props.tiers ?? { key: '', performers: [], studios: [], following: [] };
   const empty = props.empty || !props.tiers;
   const performers = useRef<HTMLDivElement>(null);
   const studios = useRef<HTMLDivElement>(null);
+  const following = useRef<HTMLDivElement>(null);
   const more = useCallback((kind: TierKind) => () => actions.moreTops(kind), [actions]);
   /* 占位那几排没有下一页可要。 */
   const shownPerformers = usePaged(performers, tiers.performers, tiers.key, ROW_FIRST,
@@ -133,12 +138,14 @@ function Tiers(props: CatalogFilterProps) {
   const shownStudios = usePaged(studios, tiers.studios, tiers.key, ROW_FIRST, empty ? undefined : more('studios'));
   const hasPerformers = empty || tiers.performers.length > 0;
   const hasStudios = empty || tiers.studios.length > 0;
+  const hasFollowing = tiers.following.length > 0;
   useEffect(() => {
     helpers.wireDrag(performers.current);
     helpers.wireDrag(studios.current);
-  }, [helpers, hasPerformers, hasStudios]);
+    helpers.wireDrag(following.current);
+  }, [helpers, hasPerformers, hasStudios, hasFollowing]);
   return (
-    <div data-catalog-tiers="" hidden={!hasPerformers && !hasStudios}>
+    <div data-catalog-tiers="" hidden={!hasPerformers && !hasStudios && !hasFollowing}>
       {hasPerformers ? (
         <div ref={performers} data-catalog-tier="performers">
           {empty ? <Placeholders kind="performer" /> : (shownPerformers as TierPerformer[]).map((person) => (
@@ -160,7 +167,34 @@ function Tiers(props: CatalogFilterProps) {
           ))}
         </div>
       ) : null}
+      {hasFollowing ? (
+        <div ref={following} data-catalog-tier="following">
+          <span data-tier-caption="">关注</span>
+          {tiers.following.map((author) => (
+            <a key={author.key} href={author.href} data-tier-following="" title={`关注 · ${author.name}`}
+              aria-label={`关注：${author.name}`}>
+              <FollowingRing author={author} />
+              <span data-tier-name="">{author.name}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+/** 关注那一格的圆头像。首字母垫在底下，头像取不到时由全站那条图片回落监听把 `<img>` 摘掉
+ *  （`data-drop="self"`），首字母露出来——同关注页作者行是同一套兜底。取景不在这里算：这些
+ *  头像是档案里已经裁好的那一张，比例本来就对。 */
+function FollowingRing({ author }: { author: TierFollowing }) {
+  return (
+    <span data-tier-ring="" aria-hidden="true">
+      <span data-tier-initial="">{author.initial}</span>
+      {author.avatar ? (
+        <img src={author.avatar} alt="" loading="lazy" data-drop="self"
+          {...(author.fallback ? { 'data-fallbacks': author.fallback } : {})} />
+      ) : null}
+    </span>
   );
 }
 

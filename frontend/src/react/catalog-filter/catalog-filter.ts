@@ -25,14 +25,27 @@ export interface TierStudio {
   fallback: string;
 }
 
+/** 关注那一排的一枚：一位被关注的创作者。首字母、圆头像与去向都由壳算好——绑定了实体的去她
+ *  的资料页，还没绑定实体的去关注页按这一位筛。 */
+export interface TierFollowing {
+  key: string;
+  name: string;
+  initial: string;
+  avatar: string;
+  fallback: string;
+  href: string;
+}
+
 export type TierKind = 'performers' | 'studios';
 
-/** 两排头像。每排手上这份是壳这一趟取回的整页；岛先摆一屏，横滚到右端再往下续，手上的用完
- *  再经 `actions.moreTops` 要下一页。`key` 变了（换了口径或换了一批）两排从头摆。 */
+/** 三排头像。女优与厂牌两排手上这份是壳这一趟取回的整页；岛先摆一屏，横滚到右端再往下续，
+ *  手上的用完再经 `actions.moreTops` 要下一页。`key` 变了（换了口径或换了一批）两排从头摆。
+ *  关注那一排是入口不是名册：壳一次给全、不翻页，全部被关注的人在关注管理里。 */
 export interface CatalogTiers {
   key: string;
   performers: TierPerformer[];
   studios: TierStudio[];
+  following: TierFollowing[];
 }
 
 /** 标签条上的一枚。`n` 为空说明这枚生效的标签不在这一批里，不印数字：印 0 会说成

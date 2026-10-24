@@ -1,8 +1,8 @@
-/* 首页上方那一整块：两排头像、玻璃浮层的两排（视图与标签、读数与排序）和网格上面那条交集条
+/* 首页上方那一整块：三排头像、玻璃浮层的两排（视图与标签、读数与排序）和网格上面那条交集条
  * （`catalog-filter` 岛，ADR-0031）。
  *
- * 作品、详情与图片沿用 `item-fixture.ts` 的桩；两排头像（`/api/tops`）、标签（`/api/facets` 的 `tags`）
- * 与目录列表在这里另给一份，好数请求、好让「按了什么」和「重取了几次」对得上。验的是行为：
+ * 作品、详情与图片沿用 `item-fixture.ts` 的桩；三排头像（`/api/tops` 与 `/api/follow/authors`）、标签
+ * （`/api/facets` 的 `tags`）与目录列表在这里另给一份，好数请求、好让「按了什么」和「重取了几次」对得上。验的是行为：
  * 点下去发什么请求、按下态与地址怎么变、详情往返时这几排是不是原来那批节点。外观对照另有截图。 */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -25,12 +25,21 @@ const PERFORMERS = Array.from({ length: 60 }, (_, at) => ({
 }));
 const STUDIOS = Array.from({ length: 10 }, (_, at) => ({ k: `演示厂牌${at + 1}`, n: 20 - at, has_logo: false }));
 const TAGS = Array.from({ length: 40 }, (_, at) => ({ k: `演示标签${String(at + 1).padStart(2, '0')}`, n: 90 - at }));
+/** 关注那一排：一位绑定了实体（点开是她的资料页），一位还没绑定（点开去关注页按这一位筛）。
+ *  头像地址留空，这一排就只画首字母——图片那一路由 `image-fallback` 自己的用例管。 */
+const FOLLOWING = [
+  { k: '演示关注者', key: 'entity:95100', n: 42, entity_id: 95_100, providers: ['xhamster'], held_by: null,
+    avatar: '', avatar_fallback: '' },
+  { k: '待确认作者', key: 'name:待确认作者', n: 7, entity_id: null, providers: ['xhamster'], held_by: null,
+    avatar: '', avatar_fallback: '' },
+];
 
 interface Counts {
   /** 目录网格那一路：竖屏那一排（`orient=竖屏`）与只探有没有内容的 `limit=1` 各走各的，不算在里面。 */
   items: URL[];
   facets: URL[];
   tops: URL[];
+  following: URL[];
 }
 
 const pathIs = (page: Page, path: string) => page.waitForFunction(
@@ -50,13 +59,19 @@ async function until(done: () => boolean, message: string, timeout = 10_000) {
 async function openHome(browser: Browser, path = '/', viewport = DESKTOP): Promise<ItemVisit & { counts: Counts }> {
   const opened = await openItemPage(browser, '/', viewport, { ready: '#grid [data-media-card]' });
   const { page } = opened;
-  const counts: Counts = { items: [], facets: [], tops: [] };
+  const counts: Counts = { items: [], facets: [], tops: [], following: [] };
   await page.route((url) => url.pathname === '/api/tops', (route) => {
     const url = new URL(route.request().url());
     counts.tops.push(url);
     const page = Number(url.searchParams.get('page') || 0);
     const performers = page === 0 ? PERFORMERS.slice(0, 40) : page === 1 ? PERFORMERS.slice(40) : [];
     return route.fulfill({ json: { performers, studios: page ? [] : STUDIOS } });
+  });
+  await page.route((url) => url.pathname === '/api/follow/authors', (route) => {
+    counts.following.push(new URL(route.request().url()));
+    return route.fulfill({ json: {
+      kind: 'performers', scope: 'online', items: FOLLOWING, total: FOLLOWING.length, has_more: false,
+    } });
   });
   await page.route((url) => url.pathname === '/api/facets', async (route) => {
     counts.facets.push(new URL(route.request().url()));
@@ -162,6 +177,36 @@ describe('首页筛选条', () => {
       assert.ok(after.length >= 1 && after.every((url) => !url.searchParams.has('studio')), '撤掉之后没有按新口径重取');
       await page.locator(`${FILTER} [data-tier-performer]`).first().click();
       await pathIs(page, `/performers/${PERFORMERS[0]!.id}`);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('关注那一排摆在女优与厂牌之后，一格一次取回整排：点一格去她的资料页', { timeout: 60_000 }, async () => {
+    const opened = await openHome(browser);
+    try {
+      const { page, counts } = opened;
+      const rows = page.locator(`${FILTER} [data-catalog-tier]`);
+      const row = page.locator(`${FILTER} [data-catalog-tier="following"]`);
+      await row.waitFor({ timeout: 15_000 });
+      // 三排的次序：入口排在目录自己那两排之后，晚到那一下长在下面，上面两排不动。
+      assert.deepEqual(await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-catalog-tier'))),
+        ['performers', 'studios', 'following']);
+      assert.equal(await row.locator('[data-tier-caption]').textContent(), '关注');
+      assert.deepEqual(await row.locator('[data-tier-following]').evaluateAll((links) => links.map((link) => ({
+        href: link.getAttribute('href'), label: link.getAttribute('aria-label'),
+        name: link.querySelector('[data-tier-name]')?.textContent,
+      }))), [
+        { href: '/creators/95100', label: '关注：演示关注者', name: '演示关注者' },
+        { href: `/follow?author=${encodeURIComponent('name:待确认作者')}`, label: '关注：待确认作者', name: '待确认作者' },
+      ]);
+      // 首字母垫在圆头像底下，图取不到时露出来的就是它。
+      assert.deepEqual(await row.locator('[data-tier-initial]').allTextContents(), ['演', '待']);
+      // 一次取回整排，不分页：它是入口，名册在关注管理里。
+      assert.ok(counts.following.length >= 1);
+      assert.ok(counts.following.every((url) => url.searchParams.get('limit') === '24' && !url.searchParams.has('page')));
+      await row.locator('[data-tier-following]').first().click();
+      await pathIs(page, '/creators/95100');
     } finally {
       await opened.close();
     }
