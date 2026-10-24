@@ -306,7 +306,7 @@ function AboutPanel({ about }: { about: { bio: string; items: HeroAboutItem[] } 
           ))}
         </dl>
       ) : null}
-      {about.bio ? <p data-about-bio=""><b>简介</b>{about.bio}</p> : null}
+      {about.bio ? <p data-about-bio=""><b>简介</b><span>{about.bio}</span></p> : null}
     </section>
   );
 }

@@ -302,8 +302,12 @@
 /* ── 站上资料（ADR-0115）──
  * 发布账号的身份在站上：一段简介加一张资料表（感情、取向、出身地、体重、纹身……）。这些读数
  * 够写十几行，放进卡里那一栏会把卡撑得比这一页的主角还高，所以排在卡下面按列铺开：宽度够了
- * 自动并成两列以上，一行一个「图标 标签 值」。 */
+ * 自动并成两列以上，一行一个「图标 标签 值」。标签栏按最长的那条（四个字，如「勾起性欲」）
+ * 留够，每一格的值连同换行后的续行都从同一条竖线上起头；站上来了更长的标签，那一格自己撑宽，
+ * 值跟着让开，不叠上去。 */
 .peach-react [data-entity-about] {
+  --about-glyph: 22px; /* 图标 16 加它与标签之间的 6 */
+  --about-label: calc(var(--about-glyph) + 4em);
   margin: 0 0 22px;
   color: var(--ink);
   font-size: var(--fs-sm);
@@ -321,11 +325,13 @@
   gap: 6px;
   min-width: 0;
 }
+/* 标签栏按最长的那条留够，值才在每一格都从同一列起头。 */
 .peach-react [data-entity-about] dt {
   display: flex;
   flex: none;
   align-items: center;
   gap: 6px;
+  min-width: var(--about-label);
   color: var(--muted);
   white-space: nowrap;
 }
@@ -341,8 +347,21 @@
   stroke-linejoin: round;
 }
 .peach-react [data-entity-about] dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.peach-react [data-entity-about] [data-about-bio] { margin: 12px 0 0; overflow-wrap: anywhere; }
-.peach-react [data-entity-about] [data-about-bio] b { margin-right: 8px; color: var(--muted); font-weight: inherit; }
+/* 简介吃同一份标签栏，正文落在值那一列。 */
+.peach-react [data-entity-about] [data-about-bio] {
+  display: grid;
+  grid-template-columns: var(--about-label) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px;
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+/* 简介没有图标，标签让出一个图标的宽度，跟其余标签的文字落在同一列。 */
+.peach-react [data-entity-about] [data-about-bio] b {
+  padding-left: var(--about-glyph);
+  color: var(--muted);
+  font-weight: inherit;
+}
 
 /* 站上的标签只是读数，不是这一页的筛选（那排在下面的筛选条里），所以是标签的脸、不接点击。 */
 .peach-react :is(dd[data-fact="tags"], [data-fact-tags]) { display: flex; flex-wrap: wrap; gap: 6px; }
