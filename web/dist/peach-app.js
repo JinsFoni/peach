@@ -11517,10 +11517,10 @@ function ur(e) {
 	return (t ? t[0] : Array.from(e.trim())[0] || "?").toUpperCase();
 }
 function dr(e) {
-	let t = e.find((e) => e.official_avatar_url), n = e.find((e) => e.avatar_url), r = t?.official_avatar_url || n?.avatar_url || "";
+	let t = e.find((e) => e.entity_avatar_url), n = e.find((e) => e.official_avatar_url), r = e.find((e) => e.avatar_url), i = t?.entity_avatar_url || n?.official_avatar_url || r?.avatar_url || "";
 	return {
-		src: r,
-		fallback: t && n && n.avatar_url !== r && n.avatar_url || ""
+		src: i,
+		fallback: [n?.official_avatar_url, r?.avatar_url].find((e) => e && e !== i) || ""
 	};
 }
 function fr(e) {

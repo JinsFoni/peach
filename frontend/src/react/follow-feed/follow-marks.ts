@@ -56,7 +56,7 @@ export function followAuthorEntity(sources: readonly FollowSource[]): string {
   return name;
 }
 
-/** 创作者圆框里那段：官方头像优先，归档站回退，都取不到时换成首字母。 */
+/** 创作者圆框里那段：档案里装好的实体图优先，其次是社媒头像与归档站镜像，都取不到时换成首字母。 */
 export function authorAvatarHtml(sources: readonly FollowSource[], name: string): string {
   const { src, fallback } = authorAvatar(sources);
   const initial = authorInitial(name);

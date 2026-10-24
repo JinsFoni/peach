@@ -62,10 +62,17 @@ describe('创作者', () => {
       author_name: 'Mr_Strauz' })], context())).toBe('Mr_Strauz');
   });
 
-  it('头像官方优先、归档站回退，回落链与首字母写在属性上；都没有就是首字母那一格', () => {
+  it('头像先取档案里装好的实体图，其次官方来源、归档站，回落链与首字母写在属性上；都没有就是首字母那一格', () => {
     const both = [source(1, { avatar_url: '/mirror.png' }), source(2, { official_avatar_url: '/official.png' })];
     expect(authorAvatarHtml(both, 'kou')).toBe('<img class="favatar" src="/official.png" alt="" loading="lazy" '
       + 'referrerpolicy="no-referrer" data-drop="initial" data-fallbacks="/mirror.png" data-initial="K" '
+      + 'data-drop-class="favatar none">');
+    /* 建过档的创作者在资料页上早有脸：关注页这个圆框不该还是首字母，也不该换成另一张。 */
+    const bound = [source(3, { avatar_url: '/mirror.png', official_avatar_url: '/official.png',
+      entity_avatar_url: '/entity-image?kind=creator&id=2&thumb=1&v=abc' })];
+    expect(authorAvatarHtml(bound, '404hotfound')).toBe('<img class="favatar" '
+      + 'src="/entity-image?kind=creator&amp;id=2&amp;thumb=1&amp;v=abc" alt="" loading="lazy" '
+      + 'referrerpolicy="no-referrer" data-drop="initial" data-fallbacks="/official.png" data-initial="4" '
       + 'data-drop-class="favatar none">');
     expect(authorAvatarHtml([source(1, { avatar_url: '/mirror.png' })], '初音')).not.toContain('data-fallbacks');
     expect(authorAvatarHtml([], '初音')).toBe('<span class="favatar none" title="没有可用头像">初</span>');

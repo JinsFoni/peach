@@ -59,6 +59,7 @@ export interface FollowSource {
   enabled: boolean;
   author_name?: string;
   author_key?: string;
+  entity_avatar_url?: string;
   official_avatar_url?: string;
   avatar_url?: string;
   entity_id?: number | null;
@@ -286,6 +287,7 @@ export interface AuthorSource {
   label?: string | undefined;
   ref?: string | undefined;
   entity_name?: string | undefined;
+  entity_avatar_url?: string | undefined;
   official_avatar_url?: string | undefined;
   avatar_url?: string | undefined;
 }
@@ -315,12 +317,16 @@ export function authorInitial(name: string): string {
   return (ascii ? ascii[0] : Array.from(name.trim())[0] || '?').toUpperCase();
 }
 
-/** 同一位创作者的官方来源优先提供头像，归档来源只回退。都取不到时用首字母。 */
+/** 同一位创作者的头像，三档依次是：档案里装好的实体图、官方来源的社媒头像、归档来源的镜像，
+ *  都取不到时用首字母。实体图排在社媒头像前面，是因为那是资料页、卡片署名到处在用的同一张脸；
+ *  换过头像只在这几处生效、资料页却早换了，看着像两个人。 */
 export function authorAvatar(group: readonly AuthorSource[]): { src: string; fallback: string } {
+  const face = group.find((source) => source.entity_avatar_url);
   const official = group.find((source) => source.official_avatar_url);
   const mirror = group.find((source) => source.avatar_url);
-  const src = official?.official_avatar_url || mirror?.avatar_url || '';
-  const fallback = official && mirror && mirror.avatar_url !== src ? mirror.avatar_url || '' : '';
+  const src = face?.entity_avatar_url || official?.official_avatar_url || mirror?.avatar_url || '';
+  const fallback = [official?.official_avatar_url, mirror?.avatar_url]
+    .find((url) => url && url !== src) || '';
   return { src, fallback };
 }
 
