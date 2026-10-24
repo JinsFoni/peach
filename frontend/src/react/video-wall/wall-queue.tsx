@@ -13,7 +13,7 @@ export function WallQueue({ items, activeId, kind, label, choose, close }: {
     <MixQueue kind={kind} title={kind === 'parts' ? '分卷' : kind === 'editions' ? '版本' : '作品'} summary={`${items.length} 个视频`} onClose={close}>
       {items.map(item => <MixQueueRow key={item.id} current={item.id === activeId} data-wall-source={item.id}
         aria-label={[item.edition_label, item.part_label ? partLabel(item.part_label) : '', label(item)].filter(Boolean).join(' · ')}
-        onClick={() => choose(item)} pic={<ArtSlot artwork={cardArtwork(item, 'small', true, 'cover')} />}>
+        onClick={() => choose(item)} pic={<ArtSlot artwork={cardArtwork(item, 'small', 'cover')} />}>
         <b>{label(item)}</b><span>{[item.edition_label, item.part_label ? partLabel(item.part_label) : '', fmtDur(item.duration)].filter(Boolean).join(' · ')}</span>
       </MixQueueRow>)}
     </MixQueue>

@@ -153,7 +153,7 @@ export function CatalogListPage(props: CatalogGridProps) {
 }
 
 function ListIdentity({ item, props, disabled }: { item: MediaItem; props: CatalogGridProps; disabled: boolean }) {
-  const artwork = cardArtwork(item, 'small', false, props.layout.javImage);
+  const artwork = cardArtwork(item, 'small', props.layout.javImage);
   const name = props.helpers.displayName(item, item.name || '').trim() || '未命名作品';
   const who = item.creator || item.performers?.join('、') || item.studio;
   return <div data-list-identity="">

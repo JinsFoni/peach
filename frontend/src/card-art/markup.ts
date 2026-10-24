@@ -207,10 +207,13 @@ export interface CoverItem {
   [field: string]: unknown;
 }
 
+/* 卡面这张图一律立即加载（`loading="eager"`）：封面格的底色是黑的，押着不发请求的话，滚到
+   那一格就是一块黑等到画面到场。列表的下一页在还差一屏时就接上（`LoadMore` 的哨兵），卡片
+   一插进文档就取图，滚动本身不再触发取图；服务端把封面存在本机，回头再滚读到的是本地副本。 */
 /* 官方封面那张 `<img>`。人脸位置原样交给页面，锚点由 `coverAnchor` 在加载后算：哪个轴被裁、
    要推多远，只有同时拿到图片和容器的比例才知道。人物在画面里的位置差别很大，写死的锚点会
    把一部分作品裁掉下巴或整个切出画外；取不到人脸就退回固定取景。 */
-export function coverImage(item: CoverItem, layout: 'big' | 'small', eager = false): string {
+export function coverImage(item: CoverItem, layout: 'big' | 'small'): string {
   const src = coverUrl(item, true);
   const wide = /ブルーレイ|blu[\s-]?ray/i.test(String(item.title || item.display_title || item.name || ''));
   const f = item.cover_frame || {};
@@ -226,7 +229,7 @@ export function coverImage(item: CoverItem, layout: 'big' | 'small', eager = fal
   const box = pb ? ` data-posterbox="${[pb.x0, (pb.px || [])[0], (pb.px || [])[1], pb.y0, pb.x1, pb.y1].map(Number).join(' ')}"` : '';
   // 小图看整张（含剧照拼贴），大图只取右侧正封。
   return `<img class="poster cover ${layout === 'small' ? 'whole' : 'front'}" src="${src}"
-    width="640" height="360" alt="" loading="${eager ? 'eager' : 'lazy'}" data-cover-code="${esc(item.code || '')}"${wide ? ' data-wide-sleeve="1"' : ''}${still ? ' data-cover-layout="still"' : ''}${face}${box} data-drop="self">`;
+    width="640" height="360" alt="" loading="eager" data-cover-code="${esc(item.code || '')}"${wide ? ' data-wide-sleeve="1"' : ''}${still ? ' data-cover-layout="still"' : ''}${face}${box} data-drop="self">`;
 }
 
 /** 封面格的两种图：官方封套（取景链接管）或预览图。空串是这一条没有可用的图。 */
@@ -241,16 +244,16 @@ const NO_ARTWORK: Artwork = { kind: '', html: '' };
 
 /** 番号作品的封面：按「JAV 默认封面」取官方封套或预览图，两种来源都挂在元素上，
  *  设置一换 `syncJavImages` 原地换图。取景数据跟着元素走，从预览图切回封面时还找得到框。 */
-export function javArtwork(item: CoverItem, layout: 'big' | 'small', eager: boolean, javImage: unknown): Artwork {
+export function javArtwork(item: CoverItem, layout: 'big' | 'small', javImage: unknown): Artwork {
   const kind = javImageKind(item, javImage);
   if (!kind) return NO_ARTWORK;
   const cover = item.has_cover && item.code ? coverUrl(item, true) : '';
   const thumb = item.has_thumb || item.has_local_poster ? `/poster?id=${item.id}&c=4` : '';
-  const coverMarkup = coverImage(item, layout, eager);
+  const coverMarkup = coverImage(item, layout);
   const frame = (coverMarkup.match(/ data-(?:c[xy]|posterbox)="[^"]*"/g) || []).join('');
   const image = kind === 'cover'
     ? coverMarkup
-    : `<img class="poster" src="${thumb}" width="640" height="360" alt="" loading="${eager ? 'eager' : 'lazy'}"${frame}>`;
+    : `<img class="poster" src="${thumb}" width="640" height="360" alt="" loading="eager"${frame}>`;
   return {
     kind: kind === 'cover' ? 'cover' : 'thumb',
     html: image.replace('<img ', `<img data-jav-image="${item.id}" data-jav-cover="${esc(cover)}" data-jav-thumb="${esc(thumb)}" data-jav-image-layout="${layout}" `),
@@ -260,29 +263,29 @@ export function javArtwork(item: CoverItem, layout: 'big' | 'small', eager: bool
 /** 一张作品卡的封面。番号作品走上面那条；关注来源的条目用来源自己的缩略图；其余取本地
  *  预览格。`size` 是这一屏的大图／小图，只施加给番号作品。 */
 export function cardArtwork(item: CoverItem & { follow_thumb_url?: string | null }, size: 'big' | 'small',
-  eager: boolean, javImage: unknown): Artwork {
-  if (item.is_jav) return javArtwork(item, size, eager, javImage);
+  javImage: unknown): Artwork {
+  if (item.is_jav) return javArtwork(item, size, javImage);
   if (item.follow_thumb_url) {
     return {
       kind: 'thumb',
-      html: `<img class="poster" src="${esc(item.follow_thumb_url)}" width="640" height="360" alt="" loading="${eager ? 'eager' : 'lazy'}" referrerpolicy="no-referrer">`,
+      html: `<img class="poster" src="${esc(item.follow_thumb_url)}" width="640" height="360" alt="" loading="eager" referrerpolicy="no-referrer">`,
     };
   }
-  return mixFace(item, size, eager, javImage);
+  return mixFace(item, size, javImage);
 }
 
 /** Mix 的一张画面，播放队列每一行的小图也是它：番号作品走封套链，其余取本地预览格，同一条
  *  在两处长得一样。`size` 只施加给番号作品。 */
-export function mixFace(item: CoverItem, size: 'big' | 'small', eager: boolean, javImage: unknown): Artwork {
-  if (item.is_jav) return javArtwork(item, size, eager, javImage);
-  if (item.has_cover && item.cover_key) return { kind: 'cover', html: coverImage(item, size, eager) };
+export function mixFace(item: CoverItem, size: 'big' | 'small', javImage: unknown): Artwork {
+  if (item.is_jav) return javArtwork(item, size, javImage);
+  if (item.has_cover && item.cover_key) return { kind: 'cover', html: coverImage(item, size) };
   if (!item.has_thumb && !item.has_local_poster) return NO_ARTWORK;
-  return { kind: 'thumb', html: `<img class="poster" src="/poster?id=${item.id}&c=4" width="640" height="360" alt="" loading="${eager ? 'eager' : 'lazy'}">` };
+  return { kind: 'thumb', html: `<img class="poster" src="/poster?id=${item.id}&c=4" width="640" height="360" alt="" loading="eager">` };
 }
 
 /** 播放队列一行的小图：Mix 画面按小图取，没有可用的图就写「无预览」占住那一格。 */
 export function queueThumbHtml(item: CoverItem, javImage: unknown): string {
-  return mixFace(item, 'small', false, javImage).html || '<span class="nopic">无预览</span>';
+  return mixFace(item, 'small', javImage).html || '<span class="nopic">无预览</span>';
 }
 
 /* 详情开场给播放器的海报位：video.js 的脚本还在下载、流源还没接上时，画面先给本地

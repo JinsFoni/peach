@@ -193,8 +193,8 @@ function VideoCard({ item, variant, layout, selected, selectMode, seekSeconds, h
   const stacked = !!(parts || editions);
   const jav = layout.active && !!item.is_jav;
   const size = jav ? layout.size : 'small';
-  const artwork = cardArtwork(item, size, false, layout.javImage);
-  const identity = size === 'small' ? artwork.html : cardArtwork(item, 'small', false, layout.javImage).html;
+  const artwork = cardArtwork(item, size, layout.javImage);
+  const identity = size === 'small' ? artwork.html : cardArtwork(item, 'small', layout.javImage).html;
   const rawName = parts?.title || item.name || '';
   const shownName = helpers.displayName(item, rawName).trim() || UNNAMED;
   const titleHtml = helpers.titleHtml(item, rawName).trim() || esc(UNNAMED);

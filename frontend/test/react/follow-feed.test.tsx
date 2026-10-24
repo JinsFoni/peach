@@ -59,6 +59,15 @@ it('失败封面随数据刷新重试，可用图片保持同一节点', async (
   expect(root.host.querySelector('[data-media-pic] > img')).toBe(recovered);
 });
 
+it('卡面图随卡片一起取：封面格的底是黑的，不押到滚进视口才发请求', async () => {
+  const root = await mountRoot(<FollowCard group={group(item(4))} authorSources={[]} media="videos"
+    context={{ sources: [], aliases: [], credentials: new Set<string>() }} selected={false} selectMode={false}
+    busy="" failure="" actions={{ openDetail: vi.fn(), openAuthor: vi.fn(), canFlip: () => false }} />);
+  const img = root.host.querySelector('[data-media-pic] > img')!;
+  expect(img.getAttribute('loading')).toBe('eager');
+  expect(img.getAttribute('decoding')).toBe('async');
+});
+
 describe('请求地址', () => {
   it('默认那一档不写进去，标签按逗号拼，种子只跟着随机排序走', () => {
     expect(followPageUrl(VIEW, 0)).toBe('/api/follow?limit=100&offset=0');

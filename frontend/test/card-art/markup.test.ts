@@ -21,7 +21,7 @@ describe('西方官方封面', () => {
   it('无番号作品在卡片、队列和详情使用资产封面键', () => {
     const item = { id: 12, has_cover: true, cover_key: 'ASSET-ID-12', cover_version: 'abc' };
     const source = '/cover?code=ASSET-ID-12&thumb=1&v=abc';
-    expect(parse(cardArtwork(item, 'big', false, 'cover').html)?.getAttribute('src')).toBe(source);
+    expect(parse(cardArtwork(item, 'big', 'cover').html)?.getAttribute('src')).toBe(source);
     expect(parse(queueThumbHtml(item, 'cover'))?.getAttribute('src')).toBe(source);
     expect(detailPosterUrl(item, 'cover')).toBe('/cover?code=ASSET-ID-12&v=abc');
   });
@@ -225,7 +225,7 @@ describe('coverImage：官方封面', () => {
     expect(img.dataset.wideSleeve).toBe('1');
     expect(parse(coverImage({ code: 'MIDA-159', title: '作品' }, 'big'))!.dataset.wideSleeve).toBeUndefined();
   });
-  it('人脸纵向夹在 5%–60%，正封框六个数按顺序送到元素上', () => {
+  it('人脸纵向夹在 5%–60%，正封框六个数按顺序送到元素上，封面立即取图', () => {
     const img = parse(coverImage({
       code: 'SSIS-001', cover_frame: { cx: 0.81, cy: 0.9 },
       poster_box: { x0: 421, y0: 0, x1: 800, y1: 538, px: [800, 538] },
@@ -235,7 +235,7 @@ describe('coverImage：官方封面', () => {
     expect(img.dataset.cx).toBe('0.81');
     expect(img.dataset.cy).toBe('0.6');
     expect(img.dataset.posterbox).toBe('421 800 538 0 800 538');
-    expect(img.getAttribute('loading')).toBe('lazy');
+    expect(img.getAttribute('loading')).toBe('eager');
     expect(img.width).toBeGreaterThan(0);
     expect(img.height).toBeGreaterThan(0);
     expect(img.dataset.drop).toBe('self');
@@ -246,12 +246,12 @@ describe('coverImage：官方封面', () => {
       .toBe('/cover?code=SSIS-001&thumb=1&v=18f3a');
     expect(coverUrl({ code: 'SSIS-001', cover_version: '18f3a' })).toBe('/cover?code=SSIS-001&v=18f3a');
     expect(detailPosterUrl({ ...JAV, cover_version: '18f3a' }, 'cover')).toBe('/cover?code=SSIS-001&v=18f3a');
-    expect(parse(javArtwork({ ...JAV, cover_version: '18f3a' }, 'big', false, 'thumbnail').html)!.dataset.javCover)
+    expect(parse(javArtwork({ ...JAV, cover_version: '18f3a' }, 'big', 'thumbnail').html)!.dataset.javCover)
       .toBe('/cover?code=SSIS-001&thumb=1&v=18f3a');
   });
 
   it('小图看整张；没检出人脸就不带锚点', () => {
-    const img = parse(coverImage({ code: 'A B' }, 'small', true))!;
+    const img = parse(coverImage({ code: 'A B' }, 'small'))!;
     expect(img.className).toBe('poster cover whole');
     expect(img.getAttribute('src')).toBe('/cover?code=A%20B&thumb=1');
     expect(img.getAttribute('loading')).toBe('eager');
@@ -267,7 +267,7 @@ const JAV = {
 
 describe('javArtwork：番号作品两种来源都挂在元素上', () => {
   it('偏好封套：官方封面加换图属性', () => {
-    const art = javArtwork(JAV, 'big', false, 'cover');
+    const art = javArtwork(JAV, 'big', 'cover');
     expect(art.kind).toBe('cover');
     const img = parse(art.html)!;
     expect(img.dataset.javImage).toBe('5');
@@ -278,7 +278,7 @@ describe('javArtwork：番号作品两种来源都挂在元素上', () => {
   });
 
   it('偏好预览图：取景数据照样跟着元素走，切回封面时找得到框', () => {
-    const art = javArtwork(JAV, 'small', true, 'thumbnail');
+    const art = javArtwork(JAV, 'small', 'thumbnail');
     expect(art.kind).toBe('thumb');
     const img = parse(art.html)!;
     expect(img.getAttribute('src')).toBe('/poster?id=5&c=4');
@@ -289,30 +289,31 @@ describe('javArtwork：番号作品两种来源都挂在元素上', () => {
   });
 
   it('两种都没有就是空的', () => {
-    expect(javArtwork({ ...JAV, has_cover: false, has_thumb: false }, 'big', false, 'cover')).toEqual({ kind: '', html: '' });
+    expect(javArtwork({ ...JAV, has_cover: false, has_thumb: false }, 'big', 'cover')).toEqual({ kind: '', html: '' });
   });
 });
 
 describe('cardArtwork 与队列小图', () => {
   it('关注来源用来源自己的缩略图，地址转义、不带来源页', () => {
-    const img = parse(cardArtwork({ id: 1, follow_thumb_url: 'https://x/a?b=1&c="2"' }, 'big', false, 'cover').html)!;
+    const img = parse(cardArtwork({ id: 1, follow_thumb_url: 'https://x/a?b=1&c="2"' }, 'big', 'cover').html)!;
     expect(img.getAttribute('src')).toBe('https://x/a?b=1&c="2"');
     expect(img.getAttribute('referrerpolicy')).toBe('no-referrer');
   });
 
   it('其余取本地预览格；没有就是空的', () => {
-    const img = parse(cardArtwork({ id: 1, has_local_poster: true }, 'big', false, 'cover').html)!;
+    const img = parse(cardArtwork({ id: 1, has_local_poster: true }, 'big', 'cover').html)!;
     expect(img.getAttribute('src')).toBe('/poster?id=1&c=4');
-    expect(img.getAttribute('loading')).toBe('lazy');
+    expect(img.getAttribute('loading')).toBe('eager');
     expect(img.width).toBeGreaterThan(0);
     expect(img.height).toBeGreaterThan(0);
-    expect(cardArtwork({ id: 1 }, 'big', false, 'cover').kind).toBe('');
+    expect(cardArtwork({ id: 1 }, 'big', 'cover').kind).toBe('');
   });
 
-  it('Mix 叠卡最上面那张立刻取，其余懒加载', () => {
-    expect(parse(mixFace({ id: 1, has_thumb: true }, 'big', true, 'cover').html)!.getAttribute('loading')).toBe('eager');
-    expect(parse(mixFace({ id: 1, has_thumb: true }, 'big', false, 'cover').html)!.getAttribute('loading')).toBe('lazy');
-    expect(mixFace({ id: 1 }, 'big', true, 'cover').kind).toBe('');
+  it('Mix 叠卡的画面也立即加载，没有图就没有这一格', () => {
+    expect(parse(mixFace({ id: 1, has_thumb: true }, 'big', 'cover').html)!.getAttribute('loading')).toBe('eager');
+    expect(parse(mixFace({ id: 1, has_cover: true, cover_key: 'k' }, 'big', 'cover').html)!.getAttribute('loading'))
+      .toBe('eager');
+    expect(mixFace({ id: 1 }, 'big', 'cover').kind).toBe('');
   });
 
   it('队列一行没有图时写「无预览」占住那一格；番号作品按小图取', () => {

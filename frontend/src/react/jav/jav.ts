@@ -38,7 +38,7 @@ export function fetchDiscoveries(scope: DiscoveryScope, signal: AbortSignal, opt
 }
 
 export function discoveryArtwork(item: Discovery, layout: 'big' | 'small', javImage: unknown): string {
-  const local = javArtwork({ ...item, is_jav: true }, layout, false, javImage);
+  const local = javArtwork({ ...item, is_jav: true }, layout, javImage);
   if (local.html || !item.cover_url) return local.html;
   return coverImage(item, layout).replace(/ src="[^"]*"/,
     ` src="${esc(item.cover_url)}" referrerpolicy="no-referrer" data-jav-image="${item.id}" data-jav-cover="${esc(item.cover_url)}" data-jav-thumb="" data-jav-image-layout="${layout}"${layout === 'big' ? ' data-panel-prior="1"' : ''}`);

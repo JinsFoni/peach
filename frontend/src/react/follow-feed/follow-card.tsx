@@ -63,7 +63,10 @@ const NoThumb = ({ provider }: { provider: string }) => (
   <span data-follow-nothumb="" dangerouslySetInnerHTML={{ __html: sourceMark(provider) }} />
 );
 
-/** 卡面图片失败时尝试原图代理；数据刷新时允许失败图片重新取图。 */
+/** 卡面图片失败时尝试原图代理；数据刷新时允许失败图片重新取图。
+ *
+ *  立即加载：封面格的底色是黑的，押着不发请求就是滚到那儿看一块黑。卡一插进文档就取图，
+ *  列表的下一页在还差一屏时就接上，滚动本身不触发取图。 */
 function Thumb({ src, fallback, width, height, provider, onLearn, retryKey }: {
   src: string; fallback?: string; width?: number; height?: number; provider: string;
   retryKey?: number;
@@ -75,7 +78,7 @@ function Thumb({ src, fallback, width, height, provider, onLearn, retryKey }: {
   useEffect(() => { setBroken(false) }, [retryKey]);
   if (broken) return <NoThumb provider={provider} />;
   return (
-    <img src={proxied ? fallback : src} alt="" loading="lazy" referrerPolicy="no-referrer"
+    <img src={proxied ? fallback : src} alt="" loading="eager" decoding="async" referrerPolicy="no-referrer"
       width={width || natural?.width} height={height || natural?.height}
       onError={() => {
         if (fallback && fallback !== src && !proxied) setProxied(true);
