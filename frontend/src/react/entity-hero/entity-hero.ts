@@ -41,7 +41,17 @@ export interface HeroCostar {
   avatar_focus?: unknown;
 }
 
-/** 女优页头右侧的资料表（ADR-0069）。服务端只下发有值的项。 */
+/** 站上资料表的一项（ADR-0115）：`label` 是页面用语，`glyph` 是雪碧图里那一枚。 */
+export interface HeroAboutItem {
+  label: string;
+  value: string;
+  glyph?: string;
+}
+
+/** 女优页头右侧的资料表（ADR-0069）。服务端只下发有值的项。
+ *
+ *  `bio` 与 `about` 是发布账号在站上的那一页：资料卡只留认人那五项，这些读数排在卡下面
+ *  （ADR-0115）。 */
 export interface HeroProfile {
   birth_date?: string;
   age?: number;
@@ -54,6 +64,8 @@ export interface HeroProfile {
   debut_title?: string;
   active?: { from?: string; to?: string; ongoing?: boolean };
   tags?: string[];
+  bio?: string;
+  about?: HeroAboutItem[];
 }
 
 export interface HeroNameGroups {
@@ -278,6 +290,18 @@ export function factRows(p: HeroProfile | null | undefined): FactRow[] {
     text: `${active.from}${active.ongoing ? ' – 至今' : active.to ? ` – ${active.to}` : ''}`, tone: 'num' }] });
   if ((p.tags || []).length) rows.push({ glyph: 'tags', label: '标签', parts: [], tags: p.tags });
   return rows;
+}
+
+/** 发布账号在站上那一页的两样东西：一段简介、一张资料表（ADR-0115）。
+ *
+ *  资料卡只留认人那五项，这些读数排在卡下面按列铺开；两样都空时整块不画。 */
+export function aboutPanel(p: HeroProfile | null | undefined): { bio: string; items: HeroAboutItem[] } {
+  const bio = (p?.bio || '').trim();
+  const items = (p?.about || []).flatMap((item) => {
+    const label = (item?.label || '').trim(), value = (item?.value || '').trim();
+    return label && value ? [{ ...item, label, value }] : [];
+  });
+  return { bio, items };
 }
 
 /** 公司页名字下面那一行先列几个别名，余下的收进「+N」。 */
