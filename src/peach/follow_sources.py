@@ -2461,6 +2461,198 @@ def _unique_texts(nodes) -> list[str]:
     return values
 
 
+#: xHamster 的创作者页路径。`/creators/<slug>-<站内 id>`，后面可以跟页签名与页码：
+#: 第一页是 `/newest`，第二页起写成 `/newest/2`（2026-10-24 实测第 12 页回 404，
+#: 而 `?page=2` 被站点忽略、回的还是第一页那 46 条）。slug 里那段数字是创作者 id，
+#: 换了 slug 但 id 对得上就回 404，所以 ref 一律带着它。
+_XHAMSTER_CREATOR_RE = re.compile(
+    r"^/creators/([A-Za-z0-9][A-Za-z0-9_.\-]*?)-(\d{1,12})(?:/newest(?:/(\d{1,5}))?)?/?$")
+_XHAMSTER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*?-\d{1,12}$")
+#: 列表卡上那一天写成 `24 October 2026`：中文站也照英文月份印，只到日，没有时分。
+_XHAMSTER_MONTHS = {name: index for index, name in enumerate(
+    ("january", "february", "march", "april", "may", "june", "july", "august",
+     "september", "october", "november", "december"), 1)}
+_XHAMSTER_DATE_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+(\d{4})")
+_XHAMSTER_CN_DATE_RE = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+
+
+def _xhamster_date(text: str | None) -> str | None:
+    """列表上那一天，换成 UTC 零点。
+
+    站点只给到日（`24 October 2026`），所以这是「这一天」，不是「这一刻」：落库时标成
+    近似值，界面照实显示，不当成站点给出的精确发布时间。认不出来就是 `None`。
+    """
+    value = str(text or "")
+    matched = _XHAMSTER_DATE_RE.search(value)
+    if matched:
+        month = _XHAMSTER_MONTHS.get(matched.group(2).casefold())
+        if month:
+            return _iso_day(int(matched.group(3)), month, int(matched.group(1)))
+        return None
+    matched = _XHAMSTER_CN_DATE_RE.search(value)
+    if matched:
+        return _iso_day(int(matched.group(1)), int(matched.group(2)), int(matched.group(3)))
+    return None
+
+
+def _iso_day(year: int, month: int, day: int) -> str | None:
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return None
+
+
+def _xhamster_cards(soup) -> list:
+    """创作者自己的作品卡。
+
+    页面上 `data-video-id` 不止一处：推广位、`moments`（她的动态流）和「推荐」小列表
+    都带这个属性。她的作品列表是那个带名字的 `div.thumb-list`，照属性全取会把别人的
+    作品和动态都算成她的更新。
+    """
+    listed = soup.select('div.thumb-list[data-ecommerce-list-name="newest"] [data-video-id]')
+    if listed:
+        return listed
+    return soup.select("div.thumb-list [data-video-id]")
+
+
+def _xhamster_page_url(base: str, page: int) -> str:
+    """第几页：第一页是列表页本身，往后加一段页码。"""
+    return base if page <= 0 else f"{base}/{page + 1}"
+
+
+class XhamsterConnector(_BaseConnector):
+    """zh.xhamster.com 的创作者页：列表就是作品本身，没有第二阶段可补。
+
+    这条连接器只管发现。创作者的头像与资料不从这里取——那个人像与简介从 pornhub
+    的同一位创作者来（`creator_profile_followup`），所以这里既不读创作者页上的头像，
+    也不把 `about` 记成资料。作品页上给的是渐进式 mp4（144p–720p，签名带到期时间），
+    播放时才解析，见 `follow_stream`。
+    """
+
+    provider = "xhamster"
+    #: 抓取站与条目地址都落在这里。
+    SITE = "https://zh.xhamster.com"
+    #: 声明中文，站点据此下发中文界面；作品标题是上传者自己写的，站点不翻译。
+    ACCEPT_LANGUAGE = "zh-CN,zh;q=0.8"
+    #: 翻过最后一页回 404：2026-10-24 实测这位创作者共 11 页，第 12 页回 404。
+    HISTORY_END_STATUSES = (404,)
+    #: 列表一页就给足标题、封面、时长与日期，详情页里没有多出来的东西。
+    BASE_TEMPLATE = SITE + "/creators/{ref}/newest"
+
+    @classmethod
+    def parse_url(cls, provider: str, parsed: urllib.parse.SplitResult,
+                  host: str) -> "ParsedSource":
+        matched = _XHAMSTER_CREATOR_RE.match(parsed.path or "/")
+        if not matched:
+            raise FollowSourceError(
+                "xhamster 的链接要指向创作者页，形如 "
+                f"{cls.SITE}/creators/shinaryen-89795/newest")
+        slug, identity = matched.group(1), matched.group(2)
+        # 页签名只认视频列表：`/exclusive`、`/recommended` 是另一些清单，不是她的更新。
+        return ParsedSource("xhamster", f"{slug}-{identity}",
+                            f"{cls.SITE}/creators/{slug}-{identity}/newest",
+                            _slug_label(slug))
+
+    def fetch(self, ref: str, *, etag: str | None = None,
+              last_modified: str | None = None, page: int = 0) -> SourceFetch:
+        identity = (ref or "").strip().strip("/")
+        if not _XHAMSTER_REF_RE.fullmatch(identity):
+            raise FollowSourceError(
+                f"xhamster 的 ref 必须是创作者页那一段（形如 shinaryen-89795），收到：{ref!r}")
+        base = self.BASE_TEMPLATE.format(ref=identity)
+        common, response = self._request(
+            _xhamster_page_url(base, page), ref=identity, etag=etag,
+            last_modified=last_modified, page=page,
+            headers={"Accept": "text/html"})
+        if response is None:
+            return SourceFetch(not_modified=True, **common)
+        soup = BeautifulSoup(response.body, "html.parser")
+        seen: set[str] = set()
+        candidates: list[FollowCandidate] = []
+        #: 一天只在它的第一条上印日期，后面的卡不再重复。向下沿用最后见到的那一天：
+        #: 第一张卡的日期与作品页里的 `created` 对得上（2026-10-24 实测）。
+        dated: str | None = None
+        for card in _xhamster_cards(soup):
+            candidate = self._candidate(card, dated)
+            if candidate is not None:
+                dated = candidate.published_at or dated
+            if candidate is None or candidate.external_id in seen:
+                continue
+            seen.add(candidate.external_id)
+            if not self.within_history(candidate):
+                continue
+            candidates.append(candidate)
+            self.publish_candidate(candidate)
+            if len(candidates) >= self.max_items:
+                break
+        if not candidates:
+            if page:
+                raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowSourceError(
+                "xhamster 创作者页没有解析出任何作品：页面结构可能已变，"
+                "或这个创作者页不存在")
+        return SourceFetch(candidates=tuple(candidates), raw_body=response.body, **common)
+
+    def _headers(self) -> dict[str, str]:
+        headers = super()._headers()
+        headers["Accept-Language"] = self.ACCEPT_LANGUAGE
+        return headers
+
+    def _candidate(self, card, fallback_date: str | None = None) -> FollowCandidate | None:
+        """一张列表卡 → 一条候选。认不出站内 id 的卡直接跳过。
+
+        `fallback_date` 是同一天里上一张卡上的日期：站点一天只印一次。
+        """
+        if str(card.get("data-video-type") or "") == "moment":
+            # `moments` 是她的动态（一段话、几张图），不是作品，地址也不是 /videos/。
+            return None
+        external_id = str(card.get("data-video-id") or "").strip()
+        if not external_id.isdigit():
+            return None
+        link = card.select_one('a[data-role="thumb-link"][href]')
+        url = str(link.get("href") or "") if link is not None else ""
+        if not url.startswith("https://"):
+            return None
+        titled = card.select_one('[data-role="thumb-link"][title]')
+        title = plain_text(titled.get("title")) if titled is not None else None
+        if not title and link is not None:
+            # 有的卡只有 `aria-label`（日期分组那一格就是这样），标题照样是真的。
+            title = plain_text(link.get("aria-label"))
+        thumb = card.select_one('img[data-role="thumb-preview-img"]')
+        duration = card.select_one('[data-role="video-duration"]')
+        added = card.select_one(".video-thumb__date-added")
+        published_at = _xhamster_date(
+            plain_text(added.get_text(" ")) if added is not None else None) or fallback_date
+        return FollowCandidate(
+            provider=self.provider,
+            external_id=external_id,
+            title=title or f"video {external_id}",
+            url=url,
+            thumb_url=self._thumb(thumb),
+            published_at=published_at,
+            duration=_duration_seconds(
+                plain_text(duration.get_text(" ")) if duration is not None else None),
+            extra={"published_precision": "approximate" if published_at else "unknown",
+                   "media_kind": "video"},
+        )
+
+    @staticmethod
+    def _thumb(node) -> str | None:
+        """列表卡的封面。`srcset` 那一档是卡片尺寸（526×298），`src` 是 2560×1440 的
+        原图：列表一次要几十张，取前者。
+
+        按空白切而不是按逗号切：这个站的地址里带 `s(w:526,h:298),webp` 这样的逗号，
+        按逗号切会切出半条地址。`srcset` 的写法是「地址 描述符, 地址 描述符」。
+        """
+        if node is None:
+            return None
+        for source in (node.get("srcset"), node.get("src")):
+            for token in str(source or "").split():
+                if token.startswith("https://"):
+                    return token
+        return None
+
+
 class F95ZoneConnector(_BaseConnector):
     """f95zone.to 的线程追更。
 
@@ -3397,7 +3589,7 @@ def parse_source_url(raw_url: str) -> ParsedSource:
 _CONNECTOR_CLASSES: tuple[type, ...] = (
     FanboxConnector, PatreonConnector, SubscribeStarConnector, KemonoConnector,
     Rule34VideoConnector, Rule34XxxConnector, Rule34PahealConnector,
-    PornhubConnector, F95ZoneConnector, SimpCityConnector,
+    PornhubConnector, XhamsterConnector, F95ZoneConnector, SimpCityConnector,
 )
 
 CONNECTORS: dict[str, type] = {

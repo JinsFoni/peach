@@ -791,6 +791,33 @@ Instagram 的独立用户登录会话未取得，自动适配器不进正式依�
 - 这些是作者自己填的读数，不是核实过的身份断言；身份类结论仍走断言与复核。证据见
   [取证记录](reference-snapshots/pornhub-model-profile.md)。
 
+**没有自己的资料页的来源（`xhamster`）按名字借这一页**（ADR-0118，`LOOKUP_PROVIDERS`）：
+创作者页只给作品列表，人像与简介在 Pornhub 那边。站上没有任何可用的检索接口
+（`/api/v1/search/suggest`、`/pornstars/search` 全 404，`/pornstars?search=` 无视参数），
+所以找法是拼 slug 再核对页面上的名字：
+
+- 认的是**页面上写的名字**与这个名字一致，不是地址拼得像；`/model/`、`/pornstar/`、`/users/`
+  各问一次，按跟完重定向的最终地址去重（同一个人只有一页）。
+- 命中不止一条（两个人同名）或一条都没有时什么都不写，摘要里说清是哪一种，留给用户认。
+- 找到的那一页记进 `entity_external_ref`（`provider=pornhub`、`external_kind=creator`），
+  下一轮直接按它取；这一页已经记在别的档案上时不借——那是两份档案同一个人，该去合并。
+
+### xHamster 的创作者页
+
+`https://zh.xhamster.com/creators/<slug>-<站内 id>/newest`（ADR-0118）：
+
+- 作品列表在那个带名字的容器里（`div.thumb-list[data-ecommerce-list-name="newest"]`），
+  一条一个 `data-video-id`；页面别处的推广位、「推荐」小列表与她的 `moments`
+  （`data-video-type="moment"`）也带这个属性，都不算她的新作。
+- **一天只印一次日期**（`24 October 2026`，中文站也照英文月份印），后面的卡沿用那一天；
+  落库标近似。作品页里有精确到秒的 `created`，但那是详情页才有的东西。
+- **页码只写在路径上**：`/newest`、`/newest/2`……；`?page=2` 被忽略、回的仍是第一页。翻过
+  最后一页回 404（`HISTORY_END_STATUSES`）。
+- 正片在作品页按下播放时才解析：`window.initials` 里 `downloadDropdownComponent.sources.mp4`
+  是各档渐进式 mp4（144p–720p，签名带 `end=` 到期时间），取的时候 302 到 `ip*.ahcdn.com`，
+  `xhcdn.com` 与 `ahcdn.com` 都在这一来源的媒体白名单里。没有清单，不走 ADR-0114 那套。
+  证据见 [取证记录](reference-snapshots/follow-xhamster-creator.md)。
+
 ## 目录型来源与社媒链接
 
 补女优社媒走「目录型来源整站抓一遍、离线比名、复核 CSV 装入」，不逐人搜索（`scripts/harvest_directory_links.py`）。

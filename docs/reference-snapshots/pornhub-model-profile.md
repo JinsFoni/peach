@@ -74,3 +74,32 @@
 - 出生日期、出道日期、出演时间：没有这几格，页头那五项里的生日、出道、生涯因此空着。
 - 站上的标签：见上。
 - 作品数：`0 个视频` 是 Peach 自己的馆藏计数，与站上的 `40 条视频` 不是一回事。
+
+## 没有地址时按名字找人
+
+别的站的创作者（`xhamster` 只给作品列表，不带人像与简介）要借这一页时没有地址可用，
+只能按名字找（ADR-0118）。站上没有可用的检索接口，实测（2026-10-24，匿名，`shinaryen`）：
+
+| 试的地址 | 状态 | 结果 |
+| --- | --- | --- |
+| `/api/v1/search/suggest?q=shinaryen` | 404 | 没这个页 |
+| `/pornstars/search?search=shinaryen` | 404 | 正文是「无搜索结果」 |
+| `/pornstars?search=shinaryen` | 200 | 列的是无关模特，搜索参数被忽略 |
+| `/search?search=shinaryen` | 404 | 没这个页 |
+| `/pornstar/search` | 301 | 转到 `/pornstars` 名录首页 |
+| `/model/search` | 301 | 转到一个叫 `search` 的账号页 |
+
+站内检索这条路走不通，所以找法只能是拼 slug 再核对页面上的名字（下表地址都相对
+`https://cn.pornhub.com`）：
+
+| 试的地址 | 状态 | 结果 |
+| --- | --- | --- |
+| `model/shinaryen` | 200 | `<title>` 是 `Shinaryen的色情片`，有 `#getAvatar`，页内 `h1` 是 `Shinaryen` |
+| `users/shinaryen` | 301 | 转到 `model/shinaryen`：同一个人只有一页 |
+| `pornstar/shinaryen` | 301 | 转到 `pornstars`（名录首页），不是人物页 |
+| `pornstars/shinaryen` | 404 | 这个路径不是人物页 |
+
+三种页型之间会互相 301，所以「几次命中」要按跟完重定向的最终地址去重。`page_for_name`
+因此按「页面上写的名字一致」而不是「地址像」来认，并把最终地址里那一段（页型与 slug）
+记下来。
+

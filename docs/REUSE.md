@@ -62,6 +62,8 @@ Linux Docker 容器复用 Docker 官方 Python `3.14.8-slim-trixie`、uv `0.13.1
 
 只有 HLS 的追更来源（pornhub）复用同一份清单改写实现（`preview_cache.rewrite_hls`，`m3u8` 6.0.0，MIT）与 STRM 的「短键 + 本机内存映射」做法，媒体仍经现有 `follow_stream.open_upstream` 逐跳校验主机。清单不进响应缓存、分片不进磁盘缓存；页型（`/model/`、`/pornstar/`、`/users/`）由页面 canonical 决定并在进程内记住。无新增依赖、无真实 ledger 写入；结构与播放边界证据见 [取证记录](reference-snapshots/follow-pornhub-hls.md)，决策见 [ADR-0114](adr/0114-hls-only-follow-sources-play-through-rewritten-playlists.md)。
 
+xHamster 追更来源复用现有连接器基类（条件请求、重试、限流、历史边界、候选回执）与 `<img srcset>`／时长／日期这三样解析帮手，新增的只有站点自己的选择器与分页写法；播放复用 `follow_stream` 的「按下播放再解析」通道与媒体主机白名单，正片是渐进式 mp4，不走清单改写。创作者的人像与资料复用 `creator_profile_followup` 与 `pornhub_profiles`（ADR-0115）那一套写库与装图，新增的只有「没有地址时按名字找人」这一步：拼 slug 再核对页面上写的名字，命中一条才接上，人物页编号记进 `entity_external_ref`。无新增依赖、无新表、无迁移；证据见 [取证记录](reference-snapshots/follow-xhamster-creator.md)，决策见 [ADR-0118](adr/0118-xhamster-follow-source-and-pornhub-profile-reuse.md)。
+
 收藏弹层的导航复用设置页液态玻璃、`useViewGlide`、`attachOverlayScrollbar`、入场与退场关键帧及落影，桌面和手机检查实际计算样式。官方预告复用 amane `cc42cee6ecf290cf05af1caa347d2dc2d5aeffcd` 的 Prestige SKU→UUID 协议，通过官方返回的作品身份与公开 MP4 字段取得地址；读取复用既有来源传输、限制和媒体代理，无新增依赖。
 
 媒体 indicator 复用关注详情的半透明灰底胶囊：`rgba(0,0,0,.5)` 底色、无描边、`--pill-radius` 圆角及既有圆点间距。滚动内容复用 `wireHorizontalScroller`、`data-overflow-left/right` 和 `board.css` 的左右渐隐，底衬保持完整。预告优先读取 DMM／厂牌官方声明，其次读取同一番号的 JavDB 详情，匿名 WebUI 作为备选。DMM 复用 `DmmSource` 的 CID 搜索、身份核对、GraphQL、`SourceTransport` 和媒体 Range 代理；`sample2DMovie.highestMovieUrl` 字段已按同一 amane 固定 revision（GPL-3.0，仅作协议证据）及真实官方响应核对，不引入上游代码或新依赖。DMM、JavDB 的正负缓存按来源隔离、每天可再检查；预告缺失与连接失败分别返回。`RCTD-764` 已通过 1 KiB Range 请求确认 206、`video/mp4` 和 MP4 文件头，身份不匹配、来源优先级、WebUI 失败、缓存与媒体主机边界由行为测试覆盖。

@@ -11689,6 +11689,7 @@ var Gr = (e) => (e?.results || []).filter((e) => !e.ok), Kr = (e) => (e?.results
 	"rule34xxx",
 	"rule34paheal",
 	"pornhub",
+	"xhamster",
 	"gofile",
 	"f95zone",
 	"simpcity"

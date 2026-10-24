@@ -6,8 +6,15 @@
 「简介」页签三处都给同一批节点，所以取哪一页都一样——这里取来源自己那个地址，不多猜一截
 路径。
 
-这里只做两件事：把那一页取回来，把上面这些东西读成 `performer_profile` 那一行要的形状
-（`record`）。写账本、装头像归 `creator_profile_followup`。
+这里只做三件事：把那一页取回来，把上面这些东西读成 `performer_profile` 那一行要的形状
+（`record`），以及在没有地址时按名字找到那一页（`page_for_name`）。写账本、装头像归
+`creator_profile_followup`。
+
+**按名字找人是给别的站的创作者用的。** xhamster 这类来源只给作品列表，也不带人像与简介，
+而同一个人的 pornhub 人物页正是那两样东西的现成出处。找法只能是拼 slug 再核对页面上的
+名字：站上没有任何可用的检索接口（2026-10-24 实测 `/api/v1/pornstar/search`、
+`/pornstars/search` 全 404，`/pornstars?search=` 回的是无关模特），所以「一条同名」这件事
+得由页面自己的名字来担保。
 
 页型（`/model/`、`/pornstar/`、`/users/`）由来源地址里那一段决定，抓取一律换成中文站：
 中文站的资料项是中文标签，值仍是站上原文（`Czech Republic`、`White`、`Brunette`）。
@@ -26,6 +33,7 @@ import urllib.parse
 
 from bs4 import BeautifulSoup
 
+from .entities import normalize_entity_name
 from .follow import FollowSourceError
 from .http import HttpRequest, HttpTransport, HttpxTransport
 from .user_agent import USER_AGENT
@@ -105,6 +113,71 @@ def fetch_page(url: str, *, transport: HttpTransport | None = None) -> tuple[str
     if response.status != 200:
         raise FollowSourceError(f"人物页返回 HTTP {response.status}")
     return response.url or url, response.body.decode("utf-8", "replace")
+
+
+#: 三种人物页。`/model/` 是绝大多数，`/pornstar/` 与 `/users/` 各收另一类账号；同一个人
+#: 只有一页，三者之间会互相 301，所以按顺序试到就算找到。
+PAGE_KINDS = ("model", "pornstar", "users")
+
+
+def slug_for_name(name: str) -> str:
+    """名字 → 站上的 slug 写法：小写、非字母数字折成一个连字符。
+
+    `Shinaryen` → `shinaryen`，`Mini Diva` → `mini-diva`。slug 不是身份，只是拼地址用，
+    认不认还得看页面上写的名字。
+    """
+    return re.sub(r"[^a-z0-9]+", "-", str(name or "").casefold()).strip("-")
+
+
+def page_for_name(name: str, *, transport: HttpTransport | None = None) -> dict | None:
+    """按名字在站上找人：只有一条同名人物页时给出那一页。
+
+    认的是「页面上写的名字与这个名字一致」，不是地址拼得像：slug 可能停在改名前的写法
+    上，而同名正是最需要分清的一类情况。所以几种页型里命中不止一条就是两个人用了同一个
+    名字，返回 `None` 交给用户自己认；一条都没命中同样返回 `None`。
+
+    取不到页（网络故障、5xx）时抛错——那是「这次没问成」，不是「站上没有这个人」。
+    返回的 `slug` 与 `kind` 取自跟完重定向的最终地址，用它以后直接取这一页。
+    """
+    slug = slug_for_name(name)
+    if not slug:
+        return None
+    request = transport or HttpxTransport()
+    wanted = normalize_entity_name(name)
+    matches: list[dict] = []
+    for kind in PAGE_KINDS:
+        status, final_url, body = _probe(f"{SITE}/{kind}/{slug}", request)
+        if status == 404:
+            continue
+        if status != 200:
+            raise FollowSourceError(f"人物页返回 HTTP {status}")
+        if any(found["url"] == final_url for found in matches):
+            continue
+        located = _PATH_RE.match(urllib.parse.urlsplit(final_url).path or "/")
+        if located is None:
+            continue
+        try:
+            parsed = parse(body)
+        except FollowSourceError:
+            # 没解析出名字的多半不是人物页（站上回的可能是搜索页或年龄确认页）。
+            continue
+        if normalize_entity_name(parsed["name"]) != wanted:
+            continue
+        matches.append({"kind": located.group(1), "slug": located.group(2),
+                        "url": final_url, "name": parsed["name"],
+                        "text": body, "parsed": parsed,
+                        "source": f"pornhub {located.group(1)} {located.group(2)}"})
+    return matches[0] if len(matches) == 1 else None
+
+
+def _probe(url: str, transport: HttpTransport) -> tuple[int, str, str]:
+    """取一页但不对 4xx 下结论：404 是「站上没有这一页」，是有意义的答案。"""
+    response = transport(
+        HttpRequest("GET", url, {"Accept": "text/html", "Accept-Language": ACCEPT_LANGUAGE,
+                                 "User-Agent": USER_AGENT}),
+        PAGE_TIMEOUT, MAX_PAGE_BYTES,
+    )
+    return response.status, response.url or url, response.body.decode("utf-8", "replace")
 
 
 def _text(node) -> str:

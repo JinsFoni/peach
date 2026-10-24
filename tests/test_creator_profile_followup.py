@@ -254,6 +254,93 @@ class RunTests(Case):
         self.assertEqual(self.transport.calls[1], AVATAR)
 
 
+class LookupTests(Case):
+    """来源只给作品列表时（xhamster）：按名字去 pornhub 找这位的人物页（ADR-0118）。
+
+    找到的那一页记成档案的站外编号，下一轮起直接按它取；同名不止一条、一条都没有时
+    什么都不写，留给用户自己认。
+    """
+
+    #: xHamster 的创作者页：只给作品列表，没有人像与简介。
+    XHAMSTER = "https://zh.xhamster.com/creators/mini-diva-88745/newest"
+
+    def xhamster_creator(self, name: str = "mini diva") -> int:
+        return self.creator(name=name, provider="xhamster", url=self.XHAMSTER,
+                            ref="mini-diva-88745")
+
+    def refs(self, entity_id: int) -> list[dict]:
+        with self.database.read_connection() as connection:
+            return [dict(row) for row in connection.execute(
+                "SELECT provider,external_kind,external_id,metadata_json FROM entity_external_ref"
+                " WHERE entity_id=? ORDER BY provider", (entity_id,))]
+
+    def pages_for(self, *kinds: str, status: int = 200) -> dict:
+        table = {f"{pornhub_profiles.SITE}/{kind}/mini-diva": (200, PAGE.encode("utf-8"))
+                 for kind in kinds}
+        if status != 200:
+            table = {url: (status, b"busy") for url in table}
+        table[AVATAR] = (200, jpeg())
+        return table
+
+    def test_a_creator_whose_source_has_no_profile_page_is_asked_for_one(self):
+        entity_id = self.xhamster_creator()
+        with self.database.read_connection() as connection:
+            found = followup.plan(connection, self.avatar_root,
+                                  Attempts(attempts_root(self.generated)))
+        self.assertEqual([item.key for item in found], [f"creator-profile:{entity_id}"])
+
+    def test_the_page_is_found_by_name_and_recorded_for_the_next_time(self):
+        entity_id = self.xhamster_creator()
+        self.transport.pages = self.pages_for("model")
+        summary = self.run_once(entity_id)
+        self.assertEqual(summary["outcome"], followup.WRITTEN)
+        self.assertEqual(self.profile(entity_id)["source_url"], f"{pornhub_profiles.SITE}/model/mini-diva")
+        self.assertEqual(self.refs(entity_id), [{
+            "provider": "pornhub", "external_kind": "creator", "external_id": "mini-diva",
+            "metadata_json": '{"page_kind": "model"}'}])
+
+    def test_the_recorded_page_is_used_without_looking_the_name_up_again(self):
+        entity_id = self.xhamster_creator()
+        self.transport.pages = self.pages_for("model")
+        self.run_once(entity_id)
+        self.transport.calls.clear()
+        self.run_once(entity_id)
+        self.assertEqual(self.transport.calls, [f"{pornhub_profiles.SITE}/model/mini-diva"])
+
+    def test_two_people_with_the_same_name_write_nothing_and_retry_next_week(self):
+        entity_id = self.xhamster_creator()
+        self.transport.pages = self.pages_for("model", "users")
+        summary = self.run_once(entity_id)
+        self.assertEqual(summary["outcome"], followup.NOTHING)
+        self.assertTrue(summary["missing"])
+        self.assertIsNone(self.profile(entity_id))
+        self.assertEqual(self.refs(entity_id), [])
+        until = float(self.attempts(entity_id)["retry_until"])
+        self.assertGreater(until, time.time() + followup.RETRY_MISSING - 60)
+
+    def test_a_page_already_recorded_on_another_creator_is_not_borrowed(self):
+        """这一页已经记在别的档案上时接上去就是把两个人的资料混成一份：交给用户去合并。"""
+        other = self.creator(name="someone else", ref="someone-else")
+        with self.database.write_transaction(notify=False) as connection:
+            connection.execute(
+                "INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id)"
+                " VALUES(?,'pornhub','creator','mini-diva')", (other,))
+        entity_id = self.xhamster_creator()
+        self.transport.pages = self.pages_for("model")
+        summary = self.run_once(entity_id)
+        self.assertEqual(summary["outcome"], followup.NOTHING)
+        self.assertIn(f"#{other}", summary["detail"])
+        self.assertIsNone(self.profile(entity_id))
+        self.assertEqual(self.refs(entity_id), [])
+
+    def test_a_name_nobody_on_the_site_uses_writes_nothing(self):
+        entity_id = self.xhamster_creator()
+        self.transport.pages = {}
+        summary = self.run_once(entity_id)
+        self.assertEqual(summary["outcome"], followup.NOTHING)
+        self.assertIsNone(self.profile(entity_id))
+
+
 class KeyTests(unittest.TestCase):
     def test_the_key_carries_the_entity_and_nothing_else(self):
         self.assertEqual(followup.followup_key(7), "creator-profile:7")
