@@ -119,8 +119,9 @@ PROVIDERS: dict[str, ProviderSpec] = {
         # 同一档的创作者页。媒体主机两个：`xhcdn.com` 出封面与正片，正片那一跳会 302 到
         # 按客户端地址派发的 `ip*.ahcdn.com`（2026-10-24 实测），少了后一个整站播不出来。
         # 站点地址取中文站，与 pornhub 一致：站上那几处界面字与分类跟着域名走。
+        # 落在 `/full-length` 那一栏：更新页里混着竖屏短视频，这一栏是站点自己筛过的正片清单。
         ProviderSpec("xhamster", "xHamster",
-                     source_url="https://zh.xhamster.com/creators/{ref}/newest",
+                     source_url="https://zh.xhamster.com/creators/{ref}/full-length/newest",
                      hosts=("xhcdn.com", "ahcdn.com"), url_hosts=("xhamster.com",),
                      priority=56, backfill=True),
         # 论坛：每个条目是同一作品的一次发布，不是独立作品。

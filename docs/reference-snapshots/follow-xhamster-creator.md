@@ -1,51 +1,53 @@
 # xHamster 创作者页与作品页证据
 
 - 取证日期：2026-10-24（中文站 `zh.xhamster.com`）
-- 用途：`xhamster` 追更来源的链接形状、列表选择器、分页写法与结束信号，以及「正片在按下
-  播放时才解析」的地址来源（ADR-0118）。
+- 用途：`xhamster` 追更来源选哪一栏、链接形状、列表数据的位置、分页写法与结束信号，以及
+  「正片在按下播放时才解析」的地址来源（ADR-0118）。
 - 凭据保护：全程匿名（不带 Cookie、不登录），只记录状态码、DOM 结构、主机名与字段名。
   正片地址里的签名段写成 `key=…`，不落任何 token；`data=` 里是一个 IPv6 字面量，同样省略。
 
 ## 哪一页
 
-样本来自身份为 `89795` 的创作者 `shinaryen`：
+样本来自身份为 `89795` 的创作者 `shinaryen`。抓的是**「全长」那一栏**：
 
 | 地址 | 状态 | 大小 | 列表条数 |
 | --- | --- | --- | --- |
-| `/creators/shinaryen-89795/newest` | 200 | 约 388 KB | 46 |
-| `/creators/shinaryen-89795/newest/2` | 200 | 约 363 KB | 46 |
-| `/creators/shinaryen-89795/newest/11` | 200 | — | 25（最后一页） |
-| `/creators/shinaryen-89795/newest/12` | 404 | — | 翻过尽头 |
+| `/creators/shinaryen-89795/full-length/newest` | 200 | 约 391 KB | 46 |
+| `/creators/shinaryen-89795/full-length/newest/2` | 200 | — | 46 |
+| `/creators/shinaryen-89795/full-length/newest/5` | 200 | — | 21（最后一页） |
+| `/creators/shinaryen-89795/full-length/newest/6` | 404 | — | 翻过尽头 |
 
-`?page=2` 被站点忽略：回的 46 条与第一页逐条同 id、同顺序；而 `/newest/2` 的 46 条与第一页
-一个都不重叠。
-页码只写在路径上，第一页是 `/newest` 本身。`/videos` 回 404，`/pornstars/<slug>` 回 404；
-`/newest/1` 是 301 到 `/newest`。slug 与站内 id 必须对得上（`whatever-89795` 回 404），
+`?page=2` 被站点忽略：回的 46 条与第一页逐条同 id、同顺序；而 `/full-length/newest/2` 的
+46 条与第一页一个都不重叠。
+页码只写在路径上，第一页是 `…/full-length/newest` 本身。`/videos` 回 404，`/pornstars/<slug>`
+回 404；`/newest/1` 是 301 到 `/newest`。slug 与站内 id 必须对得上（`whatever-89795` 回 404），
 所以 ref 一律带着 trailing 的数字 id。
+
+**为什么是这一栏而不是 `/newest`。** 她的更新页不分长短：`/newest` 那一页 46 条的时长是
+64–1348 秒，混着竖屏短视频；`/full-length/newest` 的 205 条是 610–2650 秒。全长栏是站点自己
+按「有完整正片」筛过的清单，按它取就不必自己按时长或画幅去猜。两栏同一个模板、同一个列表
+键，只有路径那一段不同；条数分别是 `/newest` 11 页 485 条、全长栏 5 页 205 条。
 
 ## 列表结构
 
-| 位置 | 选择器 | 实测内容 |
+作品清单不是从 DOM 卡片读的，而是页面内嵌的 `window.initials`：
+
+| 位置 | 键／选择器 | 实测内容 |
 | --- | --- | --- |
-| 她的作品列表 | `div.thumb-list[data-ecommerce-list-name="newest"]` | 46 个 `[data-video-id]` |
-| 一条作品 | `div[data-video-id="<数字>"]`（`data-video-type="video"`） | 站内作品 id，全局递增 |
-| 作品地址 | `a[data-role="thumb-link"]@href` | `https://zh.xhamster.com/videos/<slug>-xh<base62>` |
-| 标题 | 同一 `a` 上的 `@title`，没有就是 `@aria-label` | 页面语言的中文标题（上传者自己写的，站点不翻译） |
-| 封面 | `img[data-role="thumb-preview-img"]@srcset` | 第一档 526×298（`s(w:526,h:298),webp/…`），`@src` 是 2560×1440 原图 |
-| 时长 | `[data-role="video-duration"]` | `03:44` |
-| 日期 | `.video-thumb__date-added` | `24 October 2026`：中文站也照英文月份印，只到日，没有时分 |
+| 这一页的清单 | `window.initials` → `trendingVideoSectionComponent.videoListProps.videoThumbProps` | 46 个对象，顺序＝站点顺序（新的在前） |
+| 一条作品 | `id`、`duration`（秒）、`created`（epoch 秒）、`title`、`pageURL`、`thumbURL` | 与 DOM 里那个列表逐项同 id、同顺序（46/46 对齐） |
+| 封面 | `thumbURL` | 526×298（`s(w:526,h:298),webp/…`）；`imageURL` 是 2560×1440 原图 |
+| 时长 | `duration` | 整数秒（`881`），不是 `14:41` 那种字符串 |
+| 发布时间 | `created` | epoch 秒，精确到秒：`1792430526` = 2026-10-19T17:22:06Z |
+| 她的动态 | `momentsListComponent.videoThumbProps` | 另一栏，`videoType` 是 `moment` |
 
-页面别处也有 `data-video-id`：顶部推广位、「推荐」小列表（另一个 `data-ecommerce-list-name`）、
-以及她的 `moments`（`data-video-type="moment"`，地址是 `/moments/…`）。整页统计 52 个
-`data-video-id`，其中 46 个在那个带名字的列表里，所以选择器必须先落到列表容器上，
-再按 `data-video-type` 排掉动态。
+**读 DOM 会丢掉大部分时长与封面。** 卡片只把首屏那 9 张的 `[data-role="video-duration"]` 与
+`img[data-role="thumb-preview-img"]` 渲染进 HTML，其余 37 张是懒加载占位：同一页 46 张卡里
+只有 9 张带这两样，而列表 JSON 里 46 条一条不少。DOM 的日期（`.video-thumb__date-added`，
+`24 October 2026`）只到日、一天只印一次；JSON 的 `created` 精确到秒，落库时不必再标近似。
 
-**一天只印一次日期。** 第 1 页 46 条里有 12 条没有日期节点，它们属于紧邻上方那条的日期；
-逐条核对过与作品页里的 `created` 一致：日期 `22 October 2026` / 没有日期的那条
-（id 31370199）在作品页里是 `"created":1792688018` = 2026-10-22T16:53Z。
-
-**分页信息在页面 JSON 里给全**：`"paginationComponent":{"currentPageNumber":2,
-"lastPageNumber":11,"pageLinkTemplate":"https://zh.xhamster.com/creators/<slug>-<id>/newest/{#}"}`
+**分页信息在页面 JSON 里给全**：`"paginationComponent":{"currentPageNumber":1,
+"lastPageNumber":5,"pageLinkTemplate":"https://zh.xhamster.com/creators/<slug>-<id>/full-length/newest/{#}"}`
 ——`pageLinkTemplate` 与实测的路径写法一致。
 
 **创作者身份在页面 JSON 里**：`"channelInfo":{"id":89795,"type":"pornstar","slug":"shinaryen-89795",

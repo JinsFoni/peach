@@ -2461,58 +2461,78 @@ def _unique_texts(nodes) -> list[str]:
     return values
 
 
-#: xHamster 的创作者页路径。`/creators/<slug>-<站内 id>`，后面可以跟页签名与页码：
-#: 第一页是 `/newest`，第二页起写成 `/newest/2`（2026-10-24 实测第 12 页回 404，
-#: 而 `?page=2` 被站点忽略、回的还是第一页那 46 条）。slug 里那段数字是创作者 id，
-#: 换了 slug 但 id 对得上就回 404，所以 ref 一律带着它。
+#: xHamster 的创作者页路径。`/creators/<slug>-<站内 id>`，后面跟栏位与页码。
+#: 只认「全长」那一栏 `/full-length/newest`：她的更新页 `/newest` 里混着竖屏短视频
+#: （2026-10-24 实测那一页 46 条时长 64–1348 秒），全长栏是站点自己按「有完整正片」
+#: 筛过的一份（同一天 5 页 205 条，时长 610–2650 秒）。第二页起写成
+#: `/full-length/newest/2`，翻过最后一页回 404；而 `?page=2` 被站点忽略、回的还是
+#: 第一页那 46 条。slug 里那段数字是创作者 id，换了 slug 但 id 对不上就回 404，
+#: 所以 ref 一律带着它。粘 `/newest` 的地址也收，登记时归一到全长栏。
 _XHAMSTER_CREATOR_RE = re.compile(
-    r"^/creators/([A-Za-z0-9][A-Za-z0-9_.\-]*?)-(\d{1,12})(?:/newest(?:/(\d{1,5}))?)?/?$")
+    r"^/creators/([A-Za-z0-9][A-Za-z0-9_.\-]*?)-(\d{1,12})"
+    r"(?:/(?:full-length/)?newest(?:/(\d{1,5}))?)?/?$")
 _XHAMSTER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*?-\d{1,12}$")
-#: 列表卡上那一天写成 `24 October 2026`：中文站也照英文月份印，只到日，没有时分。
-_XHAMSTER_MONTHS = {name: index for index, name in enumerate(
-    ("january", "february", "march", "april", "may", "june", "july", "august",
-     "september", "october", "november", "december"), 1)}
-_XHAMSTER_DATE_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+(\d{4})")
-_XHAMSTER_CN_DATE_RE = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+#: 这一页的作品清单在页面内嵌的 `window.initials` 里。键名沿用站点的组件叫法，
+#: 2026-10-24 实测它就是这一页的主列表：46 项与 DOM 里那个 `div.thumb-list` 逐项同
+#: id、同顺序。每项带 `id`、`duration`（秒）、`created`（epoch 秒）、`title`、
+#: `pageURL` 与 `thumbURL`（526×298）。
+_XHAMSTER_LIST_KEY = ("trendingVideoSectionComponent", "videoListProps", "videoThumbProps")
+#: 被地域拦截页挡住时的重试间隔（秒）。前一次与后一次之间隔开一秒就换了出口，
+#: 2026-10-24 抽样：八次里有五次是四百来字节的拦截页，隔一秒连问六次全正常。
+_XHAMSTER_INTERCEPTION_DELAYS = (0, 1, 3)
 
 
-def _xhamster_date(text: str | None) -> str | None:
-    """列表上那一天，换成 UTC 零点。
-
-    站点只给到日（`24 October 2026`），所以这是「这一天」，不是「这一刻」：落库时标成
-    近似值，界面照实显示，不当成站点给出的精确发布时间。认不出来就是 `None`。
-    """
-    value = str(text or "")
-    matched = _XHAMSTER_DATE_RE.search(value)
-    if matched:
-        month = _XHAMSTER_MONTHS.get(matched.group(2).casefold())
-        if month:
-            return _iso_day(int(matched.group(3)), month, int(matched.group(1)))
+def _embedded_json_object(html: str, marker: str) -> dict | None:
+    """`marker` 之后那个 JSON 对象；字符串里的花括号不参与配对。没有就是 `None`。"""
+    at = html.find(marker)
+    if at < 0:
         return None
-    matched = _XHAMSTER_CN_DATE_RE.search(value)
-    if matched:
-        return _iso_day(int(matched.group(1)), int(matched.group(2)), int(matched.group(3)))
+    start = html.find("{", at + len(marker))
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(html)):
+        char = html[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    payload = json.loads(html[start:index + 1])
+                except (TypeError, ValueError):
+                    return None
+                return payload if isinstance(payload, dict) else None
     return None
 
 
-def _iso_day(year: int, month: int, day: int) -> str | None:
-    try:
-        return datetime(year, month, day, tzinfo=timezone.utc).isoformat()
-    except ValueError:
-        return None
+def xhamster_listing(html: str) -> list[dict] | None:
+    """创作者页这一栏的作品清单，顺序是站点给的顺序（新的在前）。
 
-
-def _xhamster_cards(soup) -> list:
-    """创作者自己的作品卡。
-
-    页面上 `data-video-id` 不止一处：推广位、`moments`（她的动态流）和「推荐」小列表
-    都带这个属性。她的作品列表是那个带名字的 `div.thumb-list`，照属性全取会把别人的
-    作品和动态都算成她的更新。
+    读页面 JSON 而不是 DOM 卡片：卡片只把首屏那几张的时长与封面渲染进 HTML，其余是
+    懒加载占位，一页 46 张里只有 9 张带（2026-10-24 实测），照 DOM 取会把三十几条的
+    时长与封面丢成空。取不到清单（地域拦截页、改版）返回 `None`，由调用方重取一次，
+    不把它当成「这位没有作品」。
     """
-    listed = soup.select('div.thumb-list[data-ecommerce-list-name="newest"] [data-video-id]')
-    if listed:
-        return listed
-    return soup.select("div.thumb-list [data-video-id]")
+    payload = _embedded_json_object(html, "window.initials")
+    node: object = payload
+    for key in _XHAMSTER_LIST_KEY:
+        node = node.get(key) if isinstance(node, dict) else None
+    if not isinstance(node, list):
+        return None
+    return [row for row in node if isinstance(row, dict)]
 
 
 def _xhamster_page_url(base: str, page: int) -> str:
@@ -2521,12 +2541,14 @@ def _xhamster_page_url(base: str, page: int) -> str:
 
 
 class XhamsterConnector(_BaseConnector):
-    """zh.xhamster.com 的创作者页：列表就是作品本身，没有第二阶段可补。
+    """zh.xhamster.com 创作者页的「全长」栏：列表就是作品本身，没有第二阶段可补。
+
+    只读 `/full-length/newest`。她的更新页混着竖屏短视频，长度不够也不是正片；那一栏
+    是站点自己筛过的一份清单，不靠自己按时长或画幅去猜。
 
     这条连接器只管发现。创作者的头像与资料不从这里取——那个人像与简介从 pornhub
     的同一位创作者来（`creator_profile_followup`），所以这里既不读创作者页上的头像，
-    也不把 `about` 记成资料。作品页上给的是渐进式 mp4（144p–720p，签名带到期时间），
-    播放时才解析，见 `follow_stream`。
+    也不把 `about` 记成资料。作品页上的正片地址播放时才解析，见 `follow_stream`。
     """
 
     provider = "xhamster"
@@ -2534,10 +2556,10 @@ class XhamsterConnector(_BaseConnector):
     SITE = "https://zh.xhamster.com"
     #: 声明中文，站点据此下发中文界面；作品标题是上传者自己写的，站点不翻译。
     ACCEPT_LANGUAGE = "zh-CN,zh;q=0.8"
-    #: 翻过最后一页回 404：2026-10-24 实测这位创作者共 11 页，第 12 页回 404。
+    #: 翻过最后一页回 404：2026-10-24 实测这位创作者的全长栏共 5 页，第 6 页回 404。
     HISTORY_END_STATUSES = (404,)
-    #: 列表一页就给足标题、封面、时长与日期，详情页里没有多出来的东西。
-    BASE_TEMPLATE = SITE + "/creators/{ref}/newest"
+    #: 列表一页就给足标题、封面、时长与发布时间，详情页里没有多出来的东西。
+    BASE_TEMPLATE = SITE + "/creators/{ref}/full-length/newest"
 
     @classmethod
     def parse_url(cls, provider: str, parsed: urllib.parse.SplitResult,
@@ -2546,11 +2568,12 @@ class XhamsterConnector(_BaseConnector):
         if not matched:
             raise FollowSourceError(
                 "xhamster 的链接要指向创作者页，形如 "
-                f"{cls.SITE}/creators/shinaryen-89795/newest")
+                f"{cls.SITE}/creators/shinaryen-89795/full-length/newest")
         slug, identity = matched.group(1), matched.group(2)
-        # 页签名只认视频列表：`/exclusive`、`/recommended` 是另一些清单，不是她的更新。
+        # 只认全长栏：`/exclusive`、`/recommended` 是另一些清单，`/newest` 里混着竖屏
+        # 短视频。给哪一种就都归一到全长栏，登记下来的地址与实际抓的是同一页。
         return ParsedSource("xhamster", f"{slug}-{identity}",
-                            f"{cls.SITE}/creators/{slug}-{identity}/newest",
+                            f"{cls.SITE}/creators/{slug}-{identity}/full-length/newest",
                             _slug_label(slug))
 
     def fetch(self, ref: str, *, etag: str | None = None,
@@ -2560,22 +2583,36 @@ class XhamsterConnector(_BaseConnector):
             raise FollowSourceError(
                 f"xhamster 的 ref 必须是创作者页那一段（形如 shinaryen-89795），收到：{ref!r}")
         base = self.BASE_TEMPLATE.format(ref=identity)
-        common, response = self._request(
-            _xhamster_page_url(base, page), ref=identity, etag=etag,
-            last_modified=last_modified, page=page,
-            headers={"Accept": "text/html"})
-        if response is None:
-            return SourceFetch(not_modified=True, **common)
-        soup = BeautifulSoup(response.body, "html.parser")
+        listing: list[dict] | None = None
+        # 这条出口上偶尔回的是地域拦截页：状态 200、四百来字节、页面里没有这份清单。
+        # 隔一会儿再问常常就正常了（换了另一条出口）：同一批抽样里八次有五次被拦，
+        # 一秒后连问六次全正常，所以按「同一批抽样」判会误以为站点改版。把一次拦截
+        # 记成「这位没有作品」或「没有更多历史」都是错的，后者还会让回填提前收工。
+        for delay in _XHAMSTER_INTERCEPTION_DELAYS:
+            if delay:
+                self.sleeper(delay)
+            common, response = self._request(
+                _xhamster_page_url(base, page), ref=identity, etag=etag,
+                last_modified=last_modified, page=page,
+                headers={"Accept": "text/html"})
+            if response is None:
+                return SourceFetch(not_modified=True, **common)
+            listing = xhamster_listing(response.body.decode("utf-8", errors="replace"))
+            if listing is not None:
+                break
+            # 拦截页会把条件请求那两样也带歪，重取时不带。
+            etag = last_modified = None
+        if listing is None:
+            raise FollowSourceError(
+                f"xhamster 创作者页没有给出作品清单（第 {page + 1} 页）："
+                "页面结构可能已变，或这条出口拿到了地域拦截页")
+        if not listing:
+            # 清单在但一条都没有：这位创作者这一栏是空的，或者站点换了一种空清单写法。
+            raise FollowSourceError("xhamster 创作者页的作品清单是空的")
         seen: set[str] = set()
         candidates: list[FollowCandidate] = []
-        #: 一天只在它的第一条上印日期，后面的卡不再重复。向下沿用最后见到的那一天：
-        #: 第一张卡的日期与作品页里的 `created` 对得上（2026-10-24 实测）。
-        dated: str | None = None
-        for card in _xhamster_cards(soup):
-            candidate = self._candidate(card, dated)
-            if candidate is not None:
-                dated = candidate.published_at or dated
+        for row in listing:
+            candidate = self._candidate(row)
             if candidate is None or candidate.external_id in seen:
                 continue
             seen.add(candidate.external_id)
@@ -2585,12 +2622,6 @@ class XhamsterConnector(_BaseConnector):
             self.publish_candidate(candidate)
             if len(candidates) >= self.max_items:
                 break
-        if not candidates:
-            if page:
-                raise FollowHistoryEnd("没有更多历史内容")
-            raise FollowSourceError(
-                "xhamster 创作者页没有解析出任何作品：页面结构可能已变，"
-                "或这个创作者页不存在")
         return SourceFetch(candidates=tuple(candidates), raw_body=response.body, **common)
 
     def _headers(self) -> dict[str, str]:
@@ -2598,59 +2629,33 @@ class XhamsterConnector(_BaseConnector):
         headers["Accept-Language"] = self.ACCEPT_LANGUAGE
         return headers
 
-    def _candidate(self, card, fallback_date: str | None = None) -> FollowCandidate | None:
-        """一张列表卡 → 一条候选。认不出站内 id 的卡直接跳过。
-
-        `fallback_date` 是同一天里上一张卡上的日期：站点一天只印一次。
-        """
-        if str(card.get("data-video-type") or "") == "moment":
+    def _candidate(self, row: Mapping[str, object]) -> FollowCandidate | None:
+        """清单里的一项 → 一条候选。认不出站内 id 或不是作品的项直接跳过。"""
+        if str(row.get("videoType") or "video") != "video":
             # `moments` 是她的动态（一段话、几张图），不是作品，地址也不是 /videos/。
             return None
-        external_id = str(card.get("data-video-id") or "").strip()
+        external_id = str(row.get("id") or "").strip()
         if not external_id.isdigit():
             return None
-        link = card.select_one('a[data-role="thumb-link"][href]')
-        url = str(link.get("href") or "") if link is not None else ""
+        url = str(row.get("pageURL") or "")
         if not url.startswith("https://"):
             return None
-        titled = card.select_one('[data-role="thumb-link"][title]')
-        title = plain_text(titled.get("title")) if titled is not None else None
-        if not title and link is not None:
-            # 有的卡只有 `aria-label`（日期分组那一格就是这样），标题照样是真的。
-            title = plain_text(link.get("aria-label"))
-        thumb = card.select_one('img[data-role="thumb-preview-img"]')
-        duration = card.select_one('[data-role="video-duration"]')
-        added = card.select_one(".video-thumb__date-added")
-        published_at = _xhamster_date(
-            plain_text(added.get_text(" ")) if added is not None else None) or fallback_date
+        title = plain_text(row.get("title"))
+        thumb = str(row.get("thumbURL") or "")
+        published_at = _iso_from_epoch(row.get("created"))
+        duration = row.get("duration")
         return FollowCandidate(
             provider=self.provider,
             external_id=external_id,
             title=title or f"video {external_id}",
             url=url,
-            thumb_url=self._thumb(thumb),
+            thumb_url=thumb if thumb.startswith("https://") else None,
             published_at=published_at,
-            duration=_duration_seconds(
-                plain_text(duration.get_text(" ")) if duration is not None else None),
-            extra={"published_precision": "approximate" if published_at else "unknown",
+            duration=(float(duration) if isinstance(duration, (int, float))
+                      and not isinstance(duration, bool) else None),
+            extra={"published_precision": "exact" if published_at else "unknown",
                    "media_kind": "video"},
         )
-
-    @staticmethod
-    def _thumb(node) -> str | None:
-        """列表卡的封面。`srcset` 那一档是卡片尺寸（526×298），`src` 是 2560×1440 的
-        原图：列表一次要几十张，取前者。
-
-        按空白切而不是按逗号切：这个站的地址里带 `s(w:526,h:298),webp` 这样的逗号，
-        按逗号切会切出半条地址。`srcset` 的写法是「地址 描述符, 地址 描述符」。
-        """
-        if node is None:
-            return None
-        for source in (node.get("srcset"), node.get("src")):
-            for token in str(source or "").split():
-                if token.startswith("https://"):
-                    return token
-        return None
 
 
 class F95ZoneConnector(_BaseConnector):
