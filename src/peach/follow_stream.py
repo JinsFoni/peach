@@ -530,23 +530,34 @@ class FollowMediaResolver:
         `video*.xhcdn.com`，取的时候会 302 到 `ip*.ahcdn.com`，两个主机都在这个来源的
         白名单里。页面按 UA 发 token：标准 UA 拿到 av1，只有 Safari 拿到 h265，而
         Safari 解不了 av1——所以先按 h264 换一次签（换成功就是所有浏览器都能播的那一档），
-        换不成就用页面自己的。"""
-        response = self.fetch(
-            item.provider,
-            HttpRequest("GET", str(item.url or ""),
-                        {"User-Agent": USER_AGENT, "Accept": "text/html"}),
-            self.timeout, self.max_bytes,
-        )
-        if response.status != 200 or len(response.body) > self.max_bytes:
-            LOGGER.warning("xhamster watch page for follow item %s unavailable: HTTP %s",
-                           item.id, response.status)
-            self._remember_miss(item.id)
-            raise FollowMediaUnavailable("xHamster 作品页未取得")
-        template = xhamster_hls_master(response.body.decode("utf-8", errors="replace"))
-        if template is None:
+        换不成就用页面自己的。
+
+        取页给两次机会：这条出口上实测八次里有一次回的是地域拦截页（状态 200、正文只有
+        几百字节、页面里没有播放器），换一次连接再取就正常，所以没拿到母清单地址时重取
+        一遍。
+        """
+        template = None
+        page_seen = False
+        for _attempt in range(2):
+            response = self.fetch(
+                item.provider,
+                HttpRequest("GET", str(item.url or ""),
+                            {"User-Agent": USER_AGENT, "Accept": "text/html"}),
+                self.timeout, self.max_bytes,
+            )
+            if response.status != 200 or len(response.body) > self.max_bytes:
+                LOGGER.warning("xhamster watch page for follow item %s unavailable: HTTP %s",
+                               item.id, response.status)
+                continue
+            page_seen = True
+            template = xhamster_hls_master(response.body.decode("utf-8", errors="replace"))
+            if template is not None:
+                break
             LOGGER.warning("xhamster watch page for follow item %s has no hls master", item.id)
+        if template is None:
             self._remember_miss(item.id)
-            raise FollowMediaUnavailable("xHamster 正片清单未取得")
+            raise FollowMediaUnavailable("xHamster 正片清单未取得" if page_seen
+                                         else "xHamster 作品页未取得")
         front, codec = template
         for candidate in xhamster_hls_codecs(codec):
             master_url = f"{front}/_TPL_.{candidate}.mp4.m3u8"
