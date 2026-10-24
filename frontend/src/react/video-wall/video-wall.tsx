@@ -45,7 +45,7 @@ const wallSessions = new Map<string, WallSession>();
 
 const WallArtwork = memo(function WallArtwork({ item, image, big = false, ratio = 1 }: { item: MediaItem; image: string; big?: boolean; ratio?: number }) {
   const source = !item.is_jav && image === 'thumbnail' && item.has_thumb ? { ...item, has_cover: false } : item;
-  const artwork = cardArtwork(source, big || ratio >= 1 ? 'small' : 'big', true, image);
+  const artwork = cardArtwork(source, big || ratio >= 1 ? 'small' : 'big', image);
   const pic = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     pic.current?.querySelectorAll<HTMLImageElement>('img.cover').forEach(img => {

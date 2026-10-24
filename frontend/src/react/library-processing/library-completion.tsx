@@ -23,7 +23,7 @@ export function missingPreviewIds(items: PreviewItem[], javImage: string): numbe
   return [...new Set(items.filter(item => (!item.medium || item.medium === 'video')
     && (!/\.(strm|iso)$/i.test(item.name || '') || !!item.code)
     && !item.disposal && item.location !== 'online' && (item.location === 'local' || !!item.code)
-    && !cardArtwork(item, 'small', false, javImage).html).map(item => item.id))];
+    && !cardArtwork(item, 'small', javImage).html).map(item => item.id))];
 }
 
 export function LibraryCompletionPrompt({ assetIds, onComplete }: { assetIds: number[]; onComplete?(): void }) {

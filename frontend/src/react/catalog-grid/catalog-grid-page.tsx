@@ -5,8 +5,8 @@
  * 起来（同遗留层 `revealSkeleton`），骨架还没到显示门槛就取完的直接落内容。
  *
  * 网格每接一页经 `onCount` 报一次总数与显示的卡数，读数画在首页筛选条（`catalog-filter` 岛）的
- * 下排。无限滚动见下面的 `LoadMore`：哨兵进入视口 320px
- * 内自动取下一页，点它等于手动取；失败在哨兵后面留一条可重试的 Note，之后只有手动才重试。 */
+ * 下排。无限滚动见下面的 `LoadMore`：哨兵进入视口上方一屏半内自动取下一页，点它等于手动取；
+ * 失败在哨兵后面留一条可重试的 Note，之后只有手动才重试。 */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useInfiniteQuery, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { mixFace as mixArtwork, mixLabel, relayoutCovers, type Artwork } from '@peach/card-art';
@@ -182,9 +182,15 @@ function GridBody(props: CatalogGridProps) {
   );
 }
 
+/* 续页的提前量：约两个视口高。到这一档就取下一页，卡片与封面在滚到之前就位。 */
+const NEXT_PAGE_AHEAD_PX = 1600;
+
 /** 续页。目录是一颗滚到附近就自己取的哨兵，资料页是一枚「载入更多」键，两者判据相同。
  *  每接上一页就按新键重挂一次，失败状态不跨页。资料页照片墙与关注页的翻页也用这一枚；关注页那枚键
- *  带字形，`children` 换掉键上的字。 */
+ *  带字形，`children` 换掉键上的字。
+ *
+ *  下一页提前一屏取：卡片一到就取封面（`loading="eager"`），服务端把每一页的封面落进本机缓存，
+ *  所以滚到底时接着的那批画面通常已经在手里。 */
 export function LoadMore({ entity, load, enabled, children }: {
   entity: boolean; load: () => Promise<void>; enabled: () => boolean; children?: ReactNode;
 }) {
@@ -216,7 +222,7 @@ export function LoadMore({ entity, load, enabled, children }: {
     if (!el) return undefined;
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) void run(false);
-    }, { rootMargin: '320px' });
+    }, { rootMargin: `${NEXT_PAGE_AHEAD_PX}px` });
     observer.observe(el);
     return () => observer.disconnect();
   }, [run]);
@@ -304,8 +310,8 @@ function ShortsStrip({ cut, props, onOpen }: {
 }
 
 /** Mix 的一张画面：番号版式开着时番号作品按这一屏的大图／小图取，其余一律按小图。 */
-function mixFace(item: MediaItem, layout: MediaCardLayout, eager: boolean): Artwork {
-  return mixArtwork(item, layout.active && item.is_jav ? layout.size : 'small', eager, layout.javImage);
+function mixFace(item: MediaItem, layout: MediaCardLayout): Artwork {
+  return mixArtwork(item, layout.active && item.is_jav ? layout.size : 'small', layout.javImage);
 }
 
 /** 目录每一页第 8 位的那张 Mix：以种子为首的相似作品。整张卡是点击区，悬停逐张翻过那一叠。 */
@@ -320,17 +326,17 @@ function HomeMix({ seed, layout, helpers, actions }: {
     const current = latest.current;
     const related = await actions.mixRelated(seed.id);
     const list = [seed, ...related].filter((item) => mixHasPicture(item, current.javImage)).slice(0, MIX_FLIP_FACES);
-    faces.current = new Map(list.map((item) => [String(item.id), mixFace(item, current, true).html]));
+    faces.current = new Map(list.map((item) => [String(item.id), mixFace(item, current).html]));
     return list.map((item) => String(item.id));
   }, [seed, actions]);
   const jav = layout.active && !!seed.is_jav;
   const size = jav ? layout.size : 'small';
-  const artwork = mixFace(seed, layout, false);
+  const artwork = mixFace(seed, layout);
   return (
     <MixCard data-mix-seed={String(seed.id)} name={`Mix · ${label}`}
       caption={`${helpers.displayName(seed, seed.name || '')}及相似作品`} count={0} badge="Mix" glyph wholeCard
       poster={null} artwork={artwork}
-      artworkIdentity={size === 'small' ? artwork.html : mixFace(seed, { ...layout, size: 'small' }, false).html}
+      artworkIdentity={size === 'small' ? artwork.html : mixFace(seed, { ...layout, size: 'small' }).html}
       relayoutArt={(root) => relayoutCovers(root, size)}
       ratio={cardRatio(seed, 'grid', layout)}
       flipImages={flipImages} faceHtml={(id) => faces.current.get(id) || ''} canFlip={actions.canFlip}

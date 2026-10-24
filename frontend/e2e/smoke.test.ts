@@ -149,13 +149,15 @@ async function assertHolds(page: Page, problems: string[], where: string): Promi
     `${where}：横向溢出，scrollWidth ${box.scrollWidth} > 视口 ${box.viewportWidth}`);
   assert.deepEqual(box.offenders, [], `${where}：有元素越出视口右边缘`);
   if (where === '/') {
-    const images = await page.locator('img[loading="lazy"]').evaluateAll(nodes => ({
+    /* 卡面封面与还押着没取的图都要自己声明尺寸：宽高写死在标签上，图到手前后占的格子一样，
+       版面不会跟着取图跳动（ADR-0117）。 */
+    const images = await page.locator('img[loading="lazy"], .poster').evaluateAll(nodes => ({
       count: nodes.length,
       missing: nodes.filter(node => !(Number(node.getAttribute('width')) > 0 && Number(node.getAttribute('height')) > 0))
         .map(node => node.getAttribute('src')),
     }));
-    assert.ok(images.count > 0, '首页没有懒加载图片');
-    assert.deepEqual(images.missing, [], '首页懒加载图片需要声明尺寸');
+    assert.ok(images.count > 0, '首页没有卡面封面或懒加载图片');
+    assert.deepEqual(images.missing, [], '首页图片需要声明尺寸');
   }
 }
 
