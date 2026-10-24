@@ -36,7 +36,7 @@
 
 - 设置面板复用 Dialog 轨迹；普通来源菜单仍按既有证据无动画，不能把 Command Menu 动画套给所有展开控件。
 - 添加关注使用 Search Input 前缀；搜索时只把前缀替换成 Spinner，来源筛选保留“全部来源”可见文字。
-- 检查、加载、保存、应用以及用户点下的“抓更早的一页”使用 Spinner；只有离开该按钮后仍在后台推进的资源扫描说明使用 Loading Dots。
+- 检查、加载、保存、应用以及用户点下的“抓全部历史”使用 Spinner；只有离开该按钮后仍在后台推进的资源扫描说明使用 Loading Dots。
 - 原生页面没有 Geist React 的 `loading` prop，因此 `setActionBusy()` 同时写入 `aria-busy=true` 与 `aria-disabled=true`，全局拦截重复点击并降低饱和度／不透明度；不用原生 `disabled`，焦点留在触发器上。
 - Peach 是原生 ES module，不引入 Geist React 运行时；共享实现位于 `web/js/ui-components.js`。
 - 「换一批」是 36px 的图标键，忙时把 shuffle 图标原位换成 16px Spinner，尺寸与图标一致。不给它另做一套「洗牌」动效：官方 Spinner 就是原位图标刷新这一档的做法，自研一份既没有取证也会让站内出现第二种忙态。
