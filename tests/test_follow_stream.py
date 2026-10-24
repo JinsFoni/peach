@@ -507,6 +507,9 @@ PORNHUB_MASTER = b"""#EXTM3U
 index-v1-a1.m3u8
 """
 
+#: 只剩一个 `?h=` 哈希的那种清单地址：作品页会给，取回来一律 410。
+PORNHUB_DEAD_PAGE = PORNHUB_WATCH_PAGE.replace(b"?validfrom=1&validto=2", b"?h=hash")
+
 
 def _pornhub_item(item_id: int = 7, metadata=None) -> SimpleNamespace:
     return SimpleNamespace(
@@ -516,11 +519,28 @@ def _pornhub_item(item_id: int = 7, metadata=None) -> SimpleNamespace:
     )
 
 
+def _pornhub_transport(pages=PORNHUB_WATCH_PAGE, *, dead_playlists: bool = False):
+    """作品页按顺序发，清单按能不能取回发；`pages` 最后一份会一直用下去。"""
+    pages = list(pages) if isinstance(pages, list) else [pages]
+    seen: list[str] = []
+
+    def transport(request, timeout, max_bytes):
+        seen.append(request.url)
+        if ".m3u8" in request.url:
+            if dead_playlists or "?h=" in request.url:
+                return HttpResponse(410, {}, b"")
+            return HttpResponse(200, {}, PORNHUB_MASTER)
+        return HttpResponse(200, {}, pages.pop(0) if len(pages) > 1 else pages[0])
+
+    transport.seen = seen
+    return transport
+
+
 class PornhubPlaybackTests(unittest.TestCase):
     """只有 HLS 的来源：正片在按下播放时才解析，分片经 Peach 的键取回。"""
 
     def test_the_watch_page_yields_a_playlist_with_every_quality(self):
-        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolver = FollowMediaResolver(_pornhub_transport())
         resolved = resolver.resolve(_pornhub_item())
         self.assertTrue(resolved.playlist)
         self.assertEqual([height for height, _ in resolved.qualities], [1080, 720, 480])
@@ -531,20 +551,34 @@ class PornhubPlaybackTests(unittest.TestCase):
         self.assertNotIn("get_media", resolved.url)
 
     def test_a_requested_height_switches_playlist_without_refetching(self):
-        requests = []
-
-        def transport(request, timeout, max_bytes):
-            requests.append(request.url)
-            return HttpResponse(200, {}, PORNHUB_WATCH_PAGE)
+        transport = _pornhub_transport()
 
         resolver = FollowMediaResolver(transport)
         resolver.resolve(_pornhub_item())
         chosen = resolver.resolve(_pornhub_item(), height=480)
         self.assertIn("/hls/480/", chosen.url)
-        self.assertEqual(len(requests), 1)
+        pages = [url for url in transport.seen if "view_video" in url]
+        self.assertEqual(len(pages), 1)
+
+    def test_a_dead_hash_playlist_comes_back_playable_after_another_page_load(self):
+        transport = _pornhub_transport([PORNHUB_DEAD_PAGE, PORNHUB_WATCH_PAGE])
+        resolved = FollowMediaResolver(transport).resolve(_pornhub_item())
+        self.assertEqual(resolved.url,
+                         "https://ev-h.phncdn.com/hls/1080/master.m3u8?validfrom=1&validto=2")
+        pages = [url for url in transport.seen if "view_video" in url]
+        self.assertEqual(len(pages), 2)
+        # 第二次取页面带了一个新参数，拿到的是缓存之外那一份。
+        self.assertNotEqual(pages[0], pages[1])
+
+    def test_a_page_that_only_offers_dead_playlists_reports_unavailable(self):
+        transport = _pornhub_transport(PORNHUB_DEAD_PAGE)
+        with self.assertRaises(FollowMediaUnavailable):
+            FollowMediaResolver(transport).resolve(_pornhub_item())
+        pages = [url for url in transport.seen if "view_video" in url]
+        self.assertEqual(len(pages), FollowMediaResolver.PORNHUB_ATTEMPTS)
 
     def test_playlist_children_become_peach_keys_and_stay_reachable(self):
-        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolver = FollowMediaResolver(_pornhub_transport())
         resolved = resolver.resolve(_pornhub_item())
         rewritten = rewrite_follow_playlist(
             PORNHUB_MASTER, "https://ev-h.phncdn.com/hls/720/master.m3u8?validto=2",
@@ -559,7 +593,7 @@ class PornhubPlaybackTests(unittest.TestCase):
                          "https://ev-h.phncdn.com/hls/720/index-v1-a1.m3u8")
 
     def test_a_playlist_child_outside_the_source_hosts_is_refused(self):
-        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolver = FollowMediaResolver(_pornhub_transport())
         resolved = resolver.resolve(_pornhub_item())
         body = b"#EXTM3U\n#EXTINF:1,\nhttps://elsewhere.example/seg.ts\n"
         with self.assertRaises(FollowProxyError):
@@ -567,7 +601,7 @@ class PornhubPlaybackTests(unittest.TestCase):
                                     provider="pornhub", resolver=resolver)
 
     def test_a_key_from_another_item_is_not_readable(self):
-        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, PORNHUB_WATCH_PAGE))
+        resolver = FollowMediaResolver(_pornhub_transport())
         resolved = resolver.resolve(_pornhub_item(7))
         key = resolver.register_resource(7, resolved.url, "https://ev-h.phncdn.com/hls/720/x.m3u8")
         with self.assertRaises(FollowMediaUnavailable):
