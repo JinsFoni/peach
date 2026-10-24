@@ -49,6 +49,10 @@
 }
 /* 女优有资料时多出第三栏：右边那张资料表（ADR-0069），隔一道竖线。三栏的判据是内容区的宽度，
  * 不是视口：宽度由 `#index` 上的 `data-hero-wide` 带进来（壳的 `syncHeroWide`），骨架读同一个开关。 */
+/* 有站上资料时左边那栏按内容定宽，读数占右边剩下的部分。 */
+#index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-about]) {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
 #index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-facts]) {
   grid-template-columns: auto minmax(0, 1fr) minmax(280px, 360px);
 }
@@ -57,7 +61,10 @@
 #index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-portrait-wrap] { grid-area: 1 / 1; }
 #index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-identity] { grid-area: 1 / 2; }
 #index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-facts] { grid-area: 1 / 3; }
-#index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-about] { grid-area: 2 / 2 / auto / -1; }
+#index[data-hero-wide] .peach-react [data-entity-profile] > [data-entity-about] { grid-area: 1 / 3; }
+#index[data-hero-wide] .peach-react [data-entity-profile]:has(> [data-entity-facts]) > [data-entity-about] {
+  grid-area: 2 / 2 / auto / -1;
+}
 
 /* ── 头像 ──
  * 外面这一层只为换头像那枚加号存在：圆框自己是 `overflow:hidden`，贴在它边上的按钮放进去就没了。
@@ -317,13 +324,14 @@
 .peach-react :is([data-entity-facts], [data-entity-size]) dd[data-fact="clip"] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ── 站上资料（ADR-0115、ADR-0116）──
  * 发布账号的身份在站上：一段简介加一张资料表（感情、取向、出身地、体重、纹身……）。这些读数
- * 排在卡里名字那一列下面、按列铺开，一行一个「图标 标签 值」；内容区窄下来就跟身份信息一起
- * 排到头像那一行下面。标签栏按最长的那条（四个字，如「勾起性欲」）留够，每一格的值连同换行后的
- * 续行都从同一条竖线上起头；站上来了更长的标签，那一格自己撑宽，值跟着让开，不叠上去。 */
+ * 排在卡里名字右边那一栏，一列三项往右铺，一格一个「图标 标签 值」；内容区窄下来就跟身份
+ * 信息一起排到头像那一行下面、按行铺开。标签栏按最长的那条（四个字，如「勾起性欲」）留够，
+ * 每一格的值连同换行后的续行都从同一条竖线上起头；站上来了更长的标签，那一格自己撑宽，
+ * 值跟着让开，不叠上去。 */
 .peach-react [data-entity-about] {
   --about-glyph: 22px; /* 图标 16 加它与标签之间的 6 */
   --about-label: calc(var(--about-glyph) + 4em);
-  grid-column: 2 / -1;
+  grid-column: 1 / -1;
   align-self: start;
   justify-self: stretch;
   margin: 0;
@@ -334,8 +342,6 @@
 }
 /* 内容区不到 900px 时头像与名字并成一排，资料接在下一行，隔一道横线。 */
 #index:not([data-hero-wide]) .peach-react [data-entity-about] {
-  grid-column: 1 / -1;
-  grid-row: auto;
   padding: 14px 0 0;
   border-top: 1px solid var(--line-soft);
 }
@@ -344,6 +350,17 @@
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 6px 28px;
   margin: 0;
+}
+/* 这一块自己量宽度：够五列都留出两百多像素就一列三项往右排，卡不必为了十几项读数再长一截；
+ * 窄下来放不下就退回按行铺开，值不至于挤成四五行。 */
+.peach-react [data-entity-about] { container-type: inline-size; }
+@container (min-width: 1080px) {
+  .peach-react [data-entity-about] dl {
+    grid-auto-flow: column;
+    grid-template-rows: repeat(3, auto);
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+  }
 }
 .peach-react [data-entity-about] dl > div {
   display: flex;
