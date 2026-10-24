@@ -220,6 +220,28 @@ describe('舞台岛', () => {
     }
   });
 
+  it('关注详情的影院模式按 16:9 撑开媒体区，播放器跟着占满那一片', { timeout: 60_000 }, async () => {
+    const opened = await openFollowFeed(browser, '/follow', DESKTOP);
+    try {
+      const page = opened.page;
+      await page.locator('[data-follow-item="1002"] [data-follow-open]').click();
+      await page.locator(FOLLOW_READY).waitFor();
+      const media = page.locator('#stage [data-stage-media]');
+      const inline = (await media.boundingBox())!;
+      assert.ok(inline.height > 0, `普通视图的媒体区高度 ${inline.height}`);
+      await page.locator('#stage [data-player-theater]').dispatchEvent('click');
+      await page.locator('#stage[data-theater]').waitFor();
+      const theater = (await media.boundingBox())!;
+      const player = (await page.locator('#stage .video-js').boundingBox())!;
+      assert.ok(theater.width > inline.width, `影院模式没占满整行：${inline.width} → ${theater.width}`);
+      assert.ok(theater.height > 300, `影院模式媒体区高度 ${theater.height}`);
+      assert.ok(player.height > 300, `影院模式播放器高度 ${player.height}`);
+      assert.deepEqual(withoutPlayer(opened.problems), []);
+    } finally {
+      await opened.close();
+    }
+  });
+
   it('右键菜单逐项：Escape 只关菜单；「迷你播放器」进小窗，小窗里的菜单换成「展开」', { timeout: 60_000 }, async () => {
     const opened = await openItemPage(browser, `/assets/${ITEM.plain}`, DESKTOP);
     try {

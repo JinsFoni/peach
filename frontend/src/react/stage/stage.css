@@ -350,6 +350,10 @@ body[data-detail-open] [class~=glowlayer]::before{animation-play-state:paused,pa
 [data-stage][data-theater] [data-stage-scroll] :is([data-jav-art],[data-item-gallery]){grid-template-rows:minmax(0,1fr)}
 [data-stage][data-theater] :is([data-media-carousel][data-carousel-below],[data-item-samples-state]){display:none}
 [data-stage][data-theater] [data-stage-scroll] :is([data-stage-media]>.video-js,[data-stage-media]>video,[data-jav-video]>.video-js){width:100%;height:100%;max-height:none;aspect-ratio:auto}
+/* 关注详情没有作品与 JAV 舞台那套固定画框，`--detail-media-height` 只在这两种舞台上有值：
+   影院模式按媒体区自己的宽度取 16:9，视口装不下就压到剩下的高度，画面由 `contain` 留边。 */
+[data-stage][data-stage-kind="follow"][data-theater] [data-stage-media]{height:auto;aspect-ratio:16/9;
+  max-height:calc(100dvh - var(--topH) - 56px)}
 @media(max-width:1080px){[data-stage] [data-stage-media]{border-radius:var(--surface-radius) var(--surface-radius) 0 0}}
 /* 详情页的关闭键压在画面上：亮色主题下白底白晕看不出悬停，用户以 YouTube 为参照——播放器上的键在亮色下也是黑底。 */
 [data-stage-close],[data-stage-close]:hover{background:rgba(0,0,0,.6);color:#fff}
