@@ -54,9 +54,11 @@ search/suggest`、`/pornstars/search` 全是 404，`/pornstars?search=` 直接�
 按名字找人只在「这位只有 `LOOKUP_PROVIDERS` 里的来源」时才发生，一次最多三次请求，找到即止并
 落成编号，所以存量创作者不会每轮都去问；同名但确实是两个人的情况留在用户手里，不会被自动接上。
 
-播放时才解析正片：作品页 `window.initials` 里 `downloadDropdownComponent.sources.mp4` 是各档
-渐进式 mp4（144p–720p，签名带 `end=` 到期时间），取的时候 302 到 `ip*.ahcdn.com`，两个主机都在
-这条来源的媒体白名单内。没有清单可改写，ADR-0114 那套 HLS 键表不参与。
+播放时才解析正片：作品页 preload 上的 HLS 母清单列着这一条的每一档（144p 到 4K），子清单是
+分片 MP4（av1）或 TS（h264），取的时候 302 到 `ip*.ahcdn.com`，两个主机都在这条来源的媒体
+白名单内。渐进式 mp4（`downloadDropdownComponent.sources.mp4`）只到 720p，不拿它当片源；
+清单改写与短键映射复用 ADR-0114 那一套。token 与编解码绑定、由 UA 决定，标准 UA 拿到 av1，
+换签成 h264 成功就是所有浏览器都能播的那一档，换不成才用页面自己给的。
 
 ## 验收
 
@@ -64,6 +66,8 @@ search/suggest`、`/pornstars/search` 全是 404，`/pornstars?search=` 直接�
   每条有标题、封面、时长与日期（同日沿用）。
 - 这位创作者的头像与资料表来自 `cn.pornhub.com/model/shinaryen`，档案上留下
   `provider=pornhub` 的人物页编号。
-- `tests/test_follow_xhamster.py` 钉住列表选择器、日期沿用、分页写法、尽头 404、媒体档位与
-  主机白名单；`tests/test_pornhub_profiles.py` 与 `tests/test_creator_profile_followup.py`
-  钉住「一条同名才接上」「两条同名什么都不写」「已记在别的档案上不借」。
+- 播放解析给出母清单里的全部档位（含 1080p 与 4K），播放器按清单类型挂 HLS。
+- `tests/test_follow_xhamster.py` 钉住列表选择器、日期沿用、分页写法、尽头 404、母清单解析、
+  换签回退与主机白名单；`tests/test_pornhub_profiles.py` 与
+  `tests/test_creator_profile_followup.py` 钉住「一条同名才接上」「两条同名什么都不写」
+  「已记在别的档案上不借」。

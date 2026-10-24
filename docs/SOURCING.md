@@ -813,10 +813,14 @@ Instagram 的独立用户登录会话未取得，自动适配器不进正式依�
   落库标近似。作品页里有精确到秒的 `created`，但那是详情页才有的东西。
 - **页码只写在路径上**：`/newest`、`/newest/2`……；`?page=2` 被忽略、回的仍是第一页。翻过
   最后一页回 404（`HISTORY_END_STATUSES`）。
-- 正片在作品页按下播放时才解析：`window.initials` 里 `downloadDropdownComponent.sources.mp4`
-  是各档渐进式 mp4（144p–720p，签名带 `end=` 到期时间），取的时候 302 到 `ip*.ahcdn.com`，
-  `xhcdn.com` 与 `ahcdn.com` 都在这一来源的媒体白名单里。没有清单，不走 ADR-0114 那套。
-  证据见 [取证记录](reference-snapshots/follow-xhamster-creator.md)。
+- 正片在作品页按下播放时才解析，取的是页头 `<link rel="preload">` 上那条 HLS 母清单
+  （`media=hls4/multi=…/_TPL_.<codec>.mp4.m3u8`，`_TPL_` 是档位占位符）：它列着这一条的每一
+  档，含 1080p 与 4K，子清单是分片 MP4（av1）或 TS（h264）。取的时候 302 到
+  `ip*.ahcdn.com`，`xhcdn.com` 与 `ahcdn.com` 都在这一来源的媒体白名单里，清单改写走
+  ADR-0114 那套。渐进式 mp4（`downloadDropdownComponent.sources.mp4`）只到 720p，不采用。
+  token 与编解码绑定、由 UA 决定（标准 UA 拿 av1、Safari 拿 h265），所以先按 h264 换一次
+  签，换不成才用页面给的那一档——换签失败是 `403 Wrong key`，不是限流。证据见
+  [取证记录](reference-snapshots/follow-xhamster-creator.md)。
 
 ## 目录型来源与社媒链接
 

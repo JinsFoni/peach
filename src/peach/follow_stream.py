@@ -85,8 +85,14 @@ _PUBLIC_MEDIA_PROVIDERS = follow_providers.public_media_hosts()
 _VIDEO_URL_RE = re.compile(r"\bvideo(?:_alt)?_url\d*\s*:\s*'([^']+)'", re.IGNORECASE)
 #: 从文件名尾部读分辨率：`4564733_1080p.mp4` → 1080，`4564733_360.mp4` → 360。
 _VIDEO_HEIGHT_RE = re.compile(r"_(\d{3,4})p?\.mp4", re.IGNORECASE)
-#: xHamster 的档位是 `sources.mp4` 的键：`144p`、`240p`、`480p`、`720p`。
-_XHAMSTER_QUALITY_RE = re.compile(r"^(\d{2,4})p$", re.IGNORECASE)
+#: xHamster 把播放器要的 HLS 母清单地址写在作品页的 `<link rel="preload">` 上，形如
+#: `…/media=hls4/multi=…/<path>/_TPL_.<codec>.mp4.m3u8`：`_TPL_` 是档位占位符，母清单本身
+#: 也从这个地址取回。token 按编解码绑定、换 codec 要重签；渐进式 mp4 只到 720p，1080p 与
+#: 4K 只在这份清单里（2026-10-24 实测）。
+_XHAMSTER_HLS_RE = re.compile(
+    r"""(https://[^"'\s]+?/media=hls4/[^"'\s]+?)/_TPL_\.(av1|h264|h265)\.mp4\.m3u8""")
+#: 母清单里一档写成 `#EXT-X-STREAM-INF:…,RESOLUTION=1920x1080`，下一行是子清单地址。
+_XHAMSTER_STREAM_INF_RE = re.compile(r"RESOLUTION=\d+x(\d+)", re.IGNORECASE)
 
 
 def _video_height(url: str) -> int:
@@ -147,10 +153,14 @@ def proxyable(provider: str, media_url: str | None) -> bool:
     return bool(url) and _allowed(provider, url)
 
 
-#: 播放时才去详情页解析正片的来源。它们落库时没有可抄的直链：rule34video 与 xhamster
-#: 的签名地址会过期，Pornhub 干脆只有 HLS 清单。`playable` 因此不能只看 `media_url`，
+#: 播放时才去详情页解析正片的来源。它们落库时没有可抄的直链：rule34video 的签名地址会
+#: 过期，Pornhub 与 xHamster 干脆只有 HLS 清单。`playable` 因此不能只看 `media_url`，
 #: 否则这几类条目在界面上是「不可播」，点开却是能播的。
 PLAY_AT_RESOLVE = frozenset({"rule34video", "pornhub", "xhamster"})
+
+#: 片源只有清单的来源：播放器要按 HLS 挂 hls.js，交给 `video` 元素它只会去取一个解析不了
+#: 的地址。
+PLAYLIST_PROVIDERS = frozenset({"pornhub", "xhamster"})
 
 
 def resolvable_at_play(provider: str, page_url: str | None) -> bool:
@@ -159,8 +169,8 @@ def resolvable_at_play(provider: str, page_url: str | None) -> bool:
 
 
 def media_type(provider: str, media_url: str | None) -> str:
-    """播放器该用哪种源类型。HLS 来源给清单类型，其余按扩展名。"""
-    if provider == "pornhub":
+    """播放器该用哪种源类型。只有清单的来源给清单类型，其余按扩展名。"""
+    if provider in PLAYLIST_PROVIDERS:
         return "application/vnd.apple.mpegurl"
     path = urllib.parse.urlsplit(str(media_url or "")).path.casefold()
     if path.endswith(".webm"):
@@ -173,8 +183,8 @@ def media_type(provider: str, media_url: str | None) -> str:
 class FollowMediaResolver:
     """Resolve stable ledger candidates into short-lived upstream playback URLs."""
 
-    #: 缓存里最多留多少条解析结果。按下播放才解析的来源（rule34video、xhamster 的签名
-    #: 直链，pornhub 的清单）都会进这个缓存，一次列表几百条，用户挨个点开就会挨个留下
+    #: 缓存里最多留多少条解析结果。按下播放才解析的来源（rule34video 的签名直链、pornhub
+    #: 与 xhamster 的清单）都会进这个缓存，一次列表几百条，用户挨个点开就会挨个留下
     #: 一条；只按 TTL 过期的话，进程活多久它就长多久。上限按「一屏反复点开也够用」定，
     #: 超了先丢已过期的，再丢最早写进来的。
     MAX_CACHE_ENTRIES = 256
@@ -513,12 +523,14 @@ class FollowMediaResolver:
         raise FollowMediaUnavailable("Pornhub 正片地址未取得")
 
     def _fetch_xhamster(self, item: FollowItemRow) -> ResolvedFollowMedia:
-        """抓作品页，从页面内嵌的 JSON 里取各档渐进式 mp4。
+        """抓作品页，从页面上那条 HLS 母清单取各档，把能取回的那一档写进缓存。
 
-        这个站给的是可整段转发的 mp4，不是清单；签名带到期时间，所以只缓存默认那几
-        分钟，过期后重新解析一次。第一跳是 `video*.xhcdn.com`，取的时候会 302 到
-        `ip*.ahcdn.com`，两个主机都在这个来源的白名单里。
-        """
+        这个站的渐进式 mp4 到 720p 为止，1080p 与 4K 只在播放器的 HLS 里，所以这里只认
+        母清单。母清单带到期时间（`end=`），只缓存两分钟，过期后重新解析一次；第一跳是
+        `video*.xhcdn.com`，取的时候会 302 到 `ip*.ahcdn.com`，两个主机都在这个来源的
+        白名单里。页面按 UA 发 token：标准 UA 拿到 av1，只有 Safari 拿到 h265，而
+        Safari 解不了 av1——所以先按 h264 换一次签（换成功就是所有浏览器都能播的那一档），
+        换不成就用页面自己的。"""
         response = self.fetch(
             item.provider,
             HttpRequest("GET", str(item.url or ""),
@@ -530,21 +542,48 @@ class FollowMediaResolver:
                            item.id, response.status)
             self._remember_miss(item.id)
             raise FollowMediaUnavailable("xHamster 作品页未取得")
-        found = tuple(
-            (height, url) for height, url in xhamster_media_sources(
-                response.body.decode("utf-8", errors="replace"), item.external_id)
-            if _allowed(item.provider, url))
-        if not found:
-            LOGGER.warning("xhamster watch page for follow item %s has no mp4 url", item.id)
+        template = xhamster_hls_master(response.body.decode("utf-8", errors="replace"))
+        if template is None:
+            LOGGER.warning("xhamster watch page for follow item %s has no hls master", item.id)
             self._remember_miss(item.id)
-            raise FollowMediaUnavailable("xHamster 正片地址未取得")
-        resolved = ResolvedFollowMedia(
-            found[0][1], item.url,
-            qualities=found,
-            allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())))
-        with self._lock:
-            self._remember(item.id, resolved)
-        return resolved
+            raise FollowMediaUnavailable("xHamster 正片清单未取得")
+        front, codec = template
+        for candidate in xhamster_hls_codecs(codec):
+            master_url = f"{front}/_TPL_.{candidate}.mp4.m3u8"
+            if not _allowed(item.provider, master_url):
+                continue
+            request = HttpRequest("GET", master_url,
+                                  {"User-Agent": USER_AGENT, "Referer": str(item.url or "")})
+            if candidate == codec:
+                master = self.fetch(item.provider, request, self.timeout,
+                                    self.PLAYLIST_PROBE_BYTES)
+            else:
+                # 换 codec 要重签，换不成时 CDN 回 `403 Wrong key`——那是 token 绑了页面给
+                # 的那一档，不是限流。这一跳因此不走冷却闸门，否则一次换签失败会把整站
+                # 暂停，后面每一条都取不到。
+                master = self.transport(request, self.timeout, self.PLAYLIST_PROBE_BYTES)
+            if master.status != 200 or len(master.body) > self.PLAYLIST_PROBE_BYTES:
+                LOGGER.warning("xhamster %s master for follow item %s unavailable: HTTP %s",
+                               candidate, item.id, master.status)
+                continue
+            found = tuple(
+                (height, url) for height, url in xhamster_hls_variants(
+                    master.body.decode("utf-8", errors="replace"), master_url)
+                if _allowed(item.provider, url))
+            if not found:
+                LOGGER.warning("xhamster %s master for follow item %s has no variant",
+                               candidate, item.id)
+                continue
+            resolved = ResolvedFollowMedia(
+                found[0][1], item.url,
+                qualities=found,
+                allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
+                playlist=True)
+            with self._lock:
+                self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
+            return resolved
+        self._remember_miss(item.id)
+        raise FollowMediaUnavailable("xHamster 正片清单未取得")
 
     def _pornhub_playlist_ready(self, item: FollowItemRow, url: str) -> bool:
         """取回一次清单，确认这一档真的能播。
@@ -604,55 +643,46 @@ def pornhub_media_definitions(text: str) -> tuple[dict, ...]:
     return ()
 
 
-def xhamster_media_sources(text: str, video_id: str) -> tuple[tuple[int, str], ...]:
-    """作品页里那几档渐进式 mp4，按高度从高到低。
+def xhamster_hls_master(text: str) -> tuple[str, str] | None:
+    """作品页里 HLS 母清单的地址模板，与页面自己给的那一档编解码。
 
-    站点把播放器要的东西整份放在 `<script id='initials-script'>window.initials=…`
-    里，其中 `downloadDropdownComponent.sources.mp4` 是 `{"144p": …, "720p": …}`。
-    这些地址带签名与到期时间（`end=`），只有页面刚给的那一份能用，所以播放时才解析。
-    页面上还有别的作品（推荐位），按 `videoId` 认这一条，不按出现顺序认。
+    `<link rel="preload">` 上的地址以 `_TPL_` 占位档位，母清单本身就从这个地址取回；
+    返回 `(前缀, codec)`，取母清单时把 `_TPL_.<codec>.mp4.m3u8` 接在前缀后面。
     """
-    marker = "window.initials="
-    start = text.find(marker)
-    if start < 0:
-        return ()
-    body_start = start + len(marker)
-    body_end = text.find("</script>", body_start)
-    if body_end < 0:
-        return ()
-    try:
-        payload = json.loads(text[body_start:body_end].strip().rstrip(";"))
-    except ValueError:
-        return ()
-    for node in _embedded_video_nodes(payload):
-        if str(node.get("videoId") or "") != str(video_id):
+    matched = _XHAMSTER_HLS_RE.search(text)
+    if matched is None:
+        return None
+    return matched.group(1), matched.group(2).casefold()
+
+
+def xhamster_hls_codecs(codec: str) -> tuple[str, ...]:
+    """按顺序试的编解码。先试 h264——Chrome、Firefox、Safari 都能解；换签不成就用页面自己
+    给的那一档（Chrome 系拿到的 token 是 av1，Safari 是 h265）。"""
+    return ("h264",) if codec == "h264" else ("h264", codec)
+
+
+def xhamster_hls_variants(master: str, base: str) -> tuple[tuple[int, str], ...]:
+    """母清单里的各档，按高度从高到低。
+
+    `#EXT-X-STREAM-INF` 那行给 `RESOLUTION=1920x1080`，紧跟的下一行是子清单地址，写成站内
+    绝对路径或同级相对地址，两种都按 `base`（母清单地址）解析成可取的绝对地址。
+    """
+    found: list[tuple[int, str]] = []
+    height = 0
+    for raw in master.splitlines():
+        line = raw.strip()
+        if not line:
             continue
-        sources = node.get("sources")
-        mp4 = sources.get("mp4") if isinstance(sources, dict) else None
-        if not isinstance(mp4, dict):
+        if line.startswith("#"):
+            matched = _XHAMSTER_STREAM_INF_RE.search(line)
+            height = int(matched.group(1)) if matched else 0
             continue
-        found: list[tuple[int, str]] = []
-        for label, url in mp4.items():
-            matched = _XHAMSTER_QUALITY_RE.match(str(label))
-            if matched is None or not isinstance(url, str) or not url.startswith("https://"):
-                continue
-            height = int(matched.group(1))
+        if height:
+            url = urllib.parse.urljoin(base, line)
             if all(existing != url for _, existing in found):
                 found.append((height, url))
-        return tuple(sorted(found, key=lambda row: row[0], reverse=True))
-    return ()
-
-
-def _embedded_video_nodes(node):
-    """页面 JSON 里所有带 `videoId` 的对象，深度优先。"""
-    if isinstance(node, dict):
-        if "videoId" in node:
-            yield node
-        for value in node.values():
-            yield from _embedded_video_nodes(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _embedded_video_nodes(value)
+        height = 0
+    return tuple(sorted(found, key=lambda row: row[0], reverse=True))
 
 
 def rewrite_follow_playlist(body: bytes, base: str, *, item_id: int, root: str,

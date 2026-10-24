@@ -54,20 +54,49 @@
 
 ## 作品页与正片地址
 
-`https://zh.xhamster.com/videos/<slug>-xh<base62>` 回 200，播放器要的东西整份在
-`<script id='initials-script'>window.initials={…}</script>` 里（合法 JSON，去掉尾部 `;`）：
+`https://zh.xhamster.com/videos/<slug>-xh<base62>` 回 200（约 397–416 KB）。播放器要的东西在
+两处：页头 `<link rel="preload">` 上的 HLS 母清单地址，和
+`<script id='initials-script'>window.initials={…}</script>` 里那份页面 JSON（合法 JSON，去掉
+尾部 `;`）。
 
-- `downloadDropdownComponent.sources.mp4` 是各档渐进式地址：实测 `144p`、`240p`、`480p`、
-  `720p` 四档，主机 `video7.xhcdn.com`，查询串带 `key=…&end=1792850400`（到期时间）与
-  `data=<IPv6 字面量>`。
-- 同一节点上的 `videoId` 与列表卡上的 `data-video-id` 相同，用它认这一条；页面上还有别的
-  作品（推荐位）。
-- 页内 `videoModel` 另给这一条的 `id`、`title`、`duration` 与精确到秒的 `created`：列表只有
-  日期，所以列表落库时标「近似」，精确到秒的那份要进作品页才有。
-- **没有 `hlsMasterUrl`**：这一站给的是可整段转发的 mp4，不是清单。
-- 取那条 mp4 回 `302`，跳到 `https://ip241705869.ahcdn.com/key=…/720p.h264.mp4`：媒体代理的
-  主机白名单必须同时有 `xhcdn.com` 与 `ahcdn.com`，否则第一跳就断。
-- `download` 链接是 `/movies/<videoId>/download/<quality>`，要登录，不用。
+### 1080p 与 4K 只在 HLS 里
+
+页头那条 preload 是播放器真正读的来源：
+
+```
+<link rel="preload" as="fetch" crossorigin="true"
+ href="https://video-nss.xhcdn.com/<token>,<到期时间>/media=hls4/
+       multi=256x144:144p:,426x240:240p:,854x480:480p:,1280x720:720p:,
+             1920x1080:1080p:,3840x2160:2160p:/031/247/098/_TPL_.av1.mp4.m3u8"/>
+```
+
+- `multi=` 列着这一条有哪些档位，写成 `宽x高:档位名` 的序列，写法随 UA 变：Chrome 系（本次
+  取证的标准 UA）每项带尾冒号、逗号分隔；Safari 那一路不带尾冒号。
+- `_TPL_` 是档位占位符；把它原样取回就是母清单本身（200，约 680 字节）：
+  `#EXT-X-STREAM-INF:…,RESOLUTION=3840x2160` 加下一行 `2160p.av1.mp4.m3u8`，一路列到 144p，
+  4K 那档 `AVERAGE-BANDWIDTH=13305055`。子清单地址有相对名与站内绝对路径两种写法
+  （`video-nss` 给相对名，`video7` 给 `/key=…` 开头的绝对路径）。
+- **编解码由 UA 决定，token 与它绑定**：Chrome、Firefox、Edge 拿到 `.av1.mp4.m3u8`，Safari
+  拿到 `.h265.mp4.m3u8`。把 token 上的 codec 换成另一种有时能取（2026-10-24 抽 30 条实测
+  19 条能换上 `.h264`），换不成的回 `403 Wrong key`——那是签在原来那一档上，不是限流。
+- 子清单：av1 那档是分片 MP4（`#EXT-X-MAP` 加 `.m4s`），h264 那档是 TS（`.ts`，
+  `#EXT-X-VERSION:3`，4 秒一片，2160p 一片约 641 KB）。首跳 `video*.xhcdn.com`，取的时候
+  302 到 `ip*.ahcdn.com`，两个主机都在这个来源的媒体白名单里。
+- `videoModel` 里 `resolution: [3840, 2160]`、`isUHD: true`，播放器统计字段写着
+  `maxQuality: 2160p`，与母清单对得上。
+
+### 渐进式 mp4 到 720p 为止
+
+`downloadDropdownComponent.sources.mp4` 是下载菜单那四档：`144p`、`240p`、`480p`、`720p`，
+主机 `video7.xhcdn.com`，查询串带 `key=…&end=<到期时间>` 与 `data=<IPv6 字面量>`。同一节点上
+的 `videoId` 与列表卡上的 `data-video-id` 相同；`sources.download` 是
+`/movies/<videoId>/download/<quality>`，要登录。
+
+- 这一份**没有 1080p 与 4K**：把 720p 的地址直接改成 `1080p.h264.mp4`，CDN 回 302 到同一个
+  720p 文件（`2160p`、`1440p` 同样如此），取不到更高一档。
+- 取这四档里任意一档也是 302 到 `ip241705869.ahcdn.com`，同样要求白名单里有 `ahcdn.com`。
+- `videoModel` 另给这一条的 `id`、`title`、`duration` 与精确到秒的 `created`：列表只有日期，
+  所以列表落库时标「近似」，精确到秒的那份要进作品页才有。
 
 ## 站点图标
 

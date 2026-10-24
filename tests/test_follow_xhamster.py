@@ -4,9 +4,9 @@
 的实测响应：她的作品在那个带名字的 `div.thumb-list` 里（`data-video-id` 是作品身份，
 `data-video-type="video"`；同一页的「动态」是 `moment`，推广位与推荐小列表也带
 `data-video-id`），日期只在当天第一条上印一次（`24 October 2026`），分页写在
-`/newest/<页码>` 这一段路径上，翻过最后一页回 404。作品页把播放器要的东西整份放在
-`<script id='initials-script'>window.initials=…` 里，`sources.mp4` 是各档渐进式地址。
-测试本身不联网：transport 全部注入。
+`/newest/<页码>` 这一段路径上，翻过最后一页回 404。作品页把播放器的 HLS 母清单地址写在
+`<link rel="preload">` 上（`_TPL_` 是档位占位符），母清单一档一行，`RESOLUTION=` 之后
+跟着子清单地址。测试本身不联网：transport 全部注入。
 """
 import unittest
 from types import SimpleNamespace
@@ -18,11 +18,36 @@ from peach.follow_sources import (
 )
 from peach.follow_stream import (
     FollowMediaResolver, FollowMediaUnavailable, media_type, resolvable_at_play,
-    xhamster_media_sources,
+    xhamster_hls_codecs, xhamster_hls_master, xhamster_hls_variants,
 )
 from peach.http import HttpResponse
 
 CREATOR = "https://zh.xhamster.com/creators/shinaryen-89795/newest"
+WATCH_URL = "https://zh.xhamster.com/videos/step-mom-xhXhBHx"
+#: 母清单的签名地址：`KEY,exp` 前缀、`multi=` 里列着这一条有哪些分辨率、`_TPL_` 占位档位。
+FRONT = ("https://video-nss.xhcdn.com/E58FK8v1UvWDYvOG-grtNw==,1792854000/media=hls4/"
+         "multi=256x144:144p:,426x240:240p:,854x480:480p:,1280x720:720p:,1920x1080:1080p:,"
+         "3840x2160:2160p:/031/247/098")
+
+def _master(codec: str = "h264") -> bytes:
+    """母清单：一档两行，`RESOLUTION=` 那行给分辨率，下一行是子清单的相对地址。"""
+    lines = ["#EXTM3U"]
+    for height, bandwidth in ((144, 118132), (480, 544412), (1080, 3289413), (2160, 13305055)):
+        lines.append(f"#EXT-X-STREAM-INF:PROGRAM-ID=1,AVERAGE-BANDWIDTH={bandwidth},"
+                     f"BANDWIDTH={bandwidth},RESOLUTION={height * 16 // 9}x{height}")
+        lines.append(f"{height}p.{codec}.mp4.m3u8")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+#: 渐进式那一份只有四档、最高 720p：它是下载菜单的内容，不是播放器用的源。
+WATCH = (f'<html><head><link rel="preload" href="{FRONT}/_TPL_.h264.mp4.m3u8"'
+         ' as="fetch" crossorigin="true"/></head><body>'
+         "<script id='initials-script'>window.initials={\"downloadDropdownComponent\":"
+         "{\"videoId\":31389143,\"sources\":{\"mp4\":{\"144p\":\"https://video7.xhcdn.com/a/144p.h264.mp4\","
+         "\"720p\":\"https://video7.xhcdn.com/a/720p.h264.mp4\"}}}};</script>"
+         "</body></html>")
+#: 只有渐进式清单、没有母清单的那一版页面。
+WATCH_WITHOUT_PLAYLIST = "<html><body>" + WATCH.split("<body>", 1)[1]
 
 
 def _transport(status=200, body=b"", headers=None, record=None):
@@ -64,12 +89,6 @@ def _page(cards: list[str], *, name: str = "shinaryen") -> bytes:
     ).encode("utf-8")
 
 
-WATCH = """<html><body><script id='initials-script'>window.initials={"videoSwitchComponent":{},
-"downloadDropdownComponent":{"videoId":31389143,"videoTitle":"x",
- "sources":{"mp4":{"144p":"https://video7.xhcdn.com/key=a/144p.h264.mp4?end=1792850400",
-                   "480p":"https://video7.xhcdn.com/key=a/480p.h264.mp4?end=1792850400",
-                   "720p":"https://video7.xhcdn.com/key=a/720p.h264.mp4?end=1792850400"},
-            "hls":{}}}};</script></body></html>"""
 
 
 class AddressTests(unittest.TestCase):
@@ -195,50 +214,96 @@ class FetchTests(unittest.TestCase):
         self.assertIsNone(candidate.summary)
 
 
+class PlaylistTests(unittest.TestCase):
+    """作品页与母清单的解析：1080p 与 4K 只在这条路上。"""
+
+    def test_the_preload_link_gives_the_master_template_and_its_codec(self):
+        self.assertEqual(xhamster_hls_master(WATCH), (FRONT, "h264"))
+        for codec in ("av1", "h265"):
+            with self.subTest(codec=codec):
+                self.assertEqual(xhamster_hls_master(WATCH.replace("_TPL_.h264", f"_TPL_.{codec}")),
+                                 (FRONT, codec))
+        self.assertIsNone(xhamster_hls_master(WATCH_WITHOUT_PLAYLIST))
+
+    def test_every_variant_is_listed_from_the_highest_down(self):
+        found = xhamster_hls_variants(_master().decode(), f"{FRONT}/_TPL_.h264.mp4.m3u8")
+        self.assertEqual([height for height, _url in found], [2160, 1080, 480, 144])
+        self.assertEqual(found[0][1], f"{FRONT}/2160p.h264.mp4.m3u8")
+
+    def test_a_variant_written_as_a_site_absolute_path_is_resolved(self):
+        """`video7` 那一路把子清单写成 `/key=…` 开头的站内绝对路径。"""
+        master = ("#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1,RESOLUTION=1920x1080\n"
+                  "/key=RJej/media=hls4/x/1080p.av1.mp4.m3u8\n")
+        self.assertEqual(
+            xhamster_hls_variants(
+                master, "https://video7.xhcdn.com/key=a/media=hls4/x/_TPL_.av1.mp4.m3u8"),
+            ((1080, "https://video7.xhcdn.com/key=RJej/media=hls4/x/1080p.av1.mp4.m3u8"),))
+
+    def test_h264_is_tried_first_and_the_page_codec_is_the_fallback(self):
+        """Safari 解不了 av1：能换签就用 h264，换不成就用页面自己那一档。"""
+        self.assertEqual(xhamster_hls_codecs("av1"), ("h264", "av1"))
+        self.assertEqual(xhamster_hls_codecs("h265"), ("h264", "h265"))
+        self.assertEqual(xhamster_hls_codecs("h264"), ("h264",))
+
+
 class MediaTests(unittest.TestCase):
-    def test_the_watch_page_lists_every_progressive_quality(self):
-        found = xhamster_media_sources(WATCH, "31389143")
-        self.assertEqual([height for height, _url in found], [720, 480, 144])
-        self.assertTrue(found[0][1].startswith("https://video7.xhcdn.com/"))
-
-    def test_another_video_on_the_same_page_is_not_this_one(self):
-        self.assertEqual(xhamster_media_sources(WATCH, "31374522"), ())
-        self.assertEqual(xhamster_media_sources("<html></html>", "31389143"), ())
-
     def _item(self, item_id: int = 5) -> SimpleNamespace:
         return SimpleNamespace(
-            id=item_id, provider="xhamster",
-            url="https://zh.xhamster.com/videos/step-mom-xhXhBHx",
+            id=item_id, provider="xhamster", url=WATCH_URL,
             media_url=None, metadata={"media_kind": "video"}, external_id="31389143",
         )
 
-    def _resolver(self, body: bytes = WATCH.encode("utf-8")):
+    def _resolver(self, page: str = WATCH,
+                  masters: dict[str, tuple[int, bytes]] | None = None):
+        answers = masters or {}
+
         def transport(request, timeout, max_bytes):
-            return HttpResponse(200, {}, body)
+            for needle, (status, body) in answers.items():
+                if needle in request.url:
+                    return HttpResponse(status, {}, body)
+            return HttpResponse(200, {}, page.encode("utf-8"))
         return FollowMediaResolver(transport)
 
-    def test_playing_resolves_the_highest_quality_and_keeps_the_choice(self):
-        resolver = self._resolver()
+    def test_playing_resolves_the_playlist_at_the_highest_quality(self):
+        resolver = self._resolver(masters={"_TPL_.h264.mp4.m3u8": (200, _master())})
         resolved = resolver.resolve(self._item())
-        self.assertEqual([height for height, _ in resolved.qualities], [720, 480, 144])
-        self.assertTrue(resolved.url.endswith("720p.h264.mp4?end=1792850400"))
+        self.assertTrue(resolved.playlist)
+        self.assertEqual([height for height, _url in resolved.qualities], [2160, 1080, 480, 144])
+        self.assertEqual(resolved.url, f"{FRONT}/2160p.h264.mp4.m3u8")
         self.assertEqual(resolved.allowed_hosts, ("xhcdn.com", "ahcdn.com"))
-        self.assertEqual(resolved.referer, "https://zh.xhamster.com/videos/step-mom-xhXhBHx")
-        chosen = resolver.resolve(self._item(), height=480)
-        self.assertIn("480p", chosen.url)
+        self.assertEqual(resolved.referer, WATCH_URL)
+        chosen = resolver.resolve(self._item(), height=1080)
+        self.assertEqual(chosen.url, f"{FRONT}/1080p.h264.mp4.m3u8")
 
-    def test_a_page_without_media_reports_unavailable(self):
-        with self.assertRaises(FollowMediaUnavailable):
-            self._resolver(b"<html></html>").resolve(self._item())
+    def test_a_refused_codec_swap_falls_back_to_the_page_codec(self):
+        """换 codec 换不成时 CDN 回 `403 Wrong key`：那不是限流，这一条仍要能播。"""
+        resolver = self._resolver(
+            page=WATCH.replace("_TPL_.h264", "_TPL_.av1"),
+            masters={"_TPL_.h264.mp4.m3u8": (403, b"Wrong key"),
+                     "_TPL_.av1.mp4.m3u8": (200, _master("av1"))})
+        resolved = resolver.resolve(self._item())
+        self.assertEqual(resolved.url, f"{FRONT}/2160p.av1.mp4.m3u8")
+        self.assertEqual(resolver.cooling("xhamster"), 0)
 
-    def test_a_media_url_outside_the_source_hosts_is_dropped(self):
-        body = WATCH.replace("https://video7.xhcdn.com", "https://elsewhere.example").encode("utf-8")
+    def test_a_page_without_a_playlist_reports_unavailable(self):
+        """渐进式 mp4 只到 720p；没有母清单就不拿它充数，宁可说取不到。"""
         with self.assertRaises(FollowMediaUnavailable):
-            self._resolver(body).resolve(self._item())
+            self._resolver(page=WATCH_WITHOUT_PLAYLIST).resolve(self._item())
+
+    def test_a_master_without_variants_reports_unavailable(self):
+        with self.assertRaises(FollowMediaUnavailable):
+            self._resolver(masters={"_TPL_.h264.mp4.m3u8": (200, b"#EXTM3U\n")}).resolve(self._item())
+
+    def test_a_variant_outside_the_source_hosts_is_dropped(self):
+        off = ("#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1,RESOLUTION=1920x1080\n"
+               "https://elsewhere.example/1080p.h264.mp4.m3u8\n").encode("utf-8")
+        with self.assertRaises(FollowMediaUnavailable):
+            self._resolver(masters={"_TPL_.h264.mp4.m3u8": (200, off)}).resolve(self._item())
 
     def test_the_player_type_and_playability_follow_the_source(self):
-        self.assertEqual(media_type("xhamster", "https://video7.xhcdn.com/a/720p.h264.mp4"),
-                         "video/mp4")
+        # 片源是清单：播放器要按 HLS 挂 hls.js，当 mp4 交给 `video` 元素就只得到一段解析
+        # 不了的清单。
+        self.assertEqual(media_type("xhamster", None), "application/vnd.apple.mpegurl")
         self.assertTrue(resolvable_at_play("xhamster", CREATOR))
         self.assertFalse(resolvable_at_play("xhamster", "https://elsewhere.example/creators/x-1"))
         # 站点地址不可信时不去解析详情页。
