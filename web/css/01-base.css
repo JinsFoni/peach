@@ -42,10 +42,10 @@
      字重同理只有 400／500／600 三档：vercel.com/design.md 明说不要自造数字字重，650、700 全部收到 600。 */
   --pill-radius:999px; --tag-radius:var(--pill-radius);
   --control-radius:6px; --badge-radius:4px; --floating-radius:12px; --surface-radius:8px; --tag-pad-y:4px; --tag-pad-x:10px; --hover-delay:5s;
-  /* 侧栏光晕的参数层。三枚光晕的颜色、椭圆尺寸和收边位置全部落在这里；
-     `.glowlayer::before` 只引用变量，一个字面颜色都不写。这组默认值就是预设「钨丝暖阁」，
+  /* 光晕的参数层。三枚光晕的颜色、椭圆尺寸和收边位置全部落在这里；
+     `[data-glow-layer]::before` 只引用变量，一个字面颜色都不写。这组默认值就是预设「钨丝暖阁」，
      颜色与 frontend/src/appearance/home-glow.ts 里那一档一字不差，页面第一帧和 applyHomeGlow() 写完之后画面相同。
-     只有颜色那三个由设置面板写到 `.glowlayer` 自己的行内样式上，写在这一层而不是 <html>
+     只有颜色那三个由设置面板写到 `[data-glow-layer]` 自己的行内样式上，写在这一层而不是 <html>
      上的理由记在下面那条规则里；半轴和收边只有这一份，用户不调、也不进 localStorage。
      圆心根本不在参数里：三枚光晕是侧栏玻璃面上那两团反光换成的，位置由 glowdrift 那两条
      动画一直推着走，写死一个圆心等于把会动的光钉成一张贴图。存几何还有第二重代价——
@@ -65,11 +65,11 @@
   --glow-spot-2-color:rgba(182,188,196,.38); --glow-spot-2-w:calc(26% * var(--glow-size)); --glow-spot-2-h:calc(26% * var(--glow-size)); --glow-spot-2-fade:calc(74% * var(--glow-soften));
   --glow-spot-3-color:rgba(111,119,131,.50); --glow-spot-3-w:calc(23% * var(--glow-size)); --glow-spot-3-h:calc(23% * var(--glow-size)); --glow-spot-3-fade:calc(73% * var(--glow-soften));
   /* 强度是用户那一档，主题缩放是色板那一档，实际不透明度是两者相乘。
-     深色侧栏那块玻璃吃光、浅色那块反光，同一组颜色照搬到浅色会浓得压住导航文字，所以
+     深色那块面吃光、浅色那块反光，同一组颜色照搬到浅色会浓得压住面上的字，所以
      浅色把整层按同一个比例收下来，而不是另存一套颜色：用户挑的是同一片光，两个主题不该
      是两种东西。这一档的 .6 是在浏览器里逐档量出来的，判据是玻璃面上那块底色偏暖多少
      （红减蓝）：.34 只有 4 级，一眼看过去和没开一样；.6 是 7 级，三枚光晕读得出来是三种
-     颜色；到 1 是 11 级，整条侧栏跟着泛米色，那时候有颜色的就不是光而是侧栏本身了。 */
+     颜色；到 1 是 11 级，整块面跟着泛米色，那时候有颜色的就不是光而是面本身了。 */
   --glow-noise:0; --glow-strength:1; --glow-theme-scale:.6;
   /* 一颗标签的脸只有这一张：--tag-radius 的圆角、一圈 --line、这块比面再沉一档的填充、
      --ink-2 的字。同一个词出现在卡片上、详情面板里、筛选条上和交集条里，读的人认的是
@@ -171,7 +171,7 @@ body{background:var(--page);color:var(--ink);
   font-family:Roboto,"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif;
   font-size:var(--fs-md);line-height:1.45;-webkit-font-smoothing:antialiased;
   font-variant-numeric:tabular-nums}
-/* 光晕住在侧栏里自己那枚空 div 上，而不是 `body` 的伪元素上，为的是把自定义属性的失效
+/* 光晕住在宿主面上自己那枚空 div 上，而不是 `body` 的伪元素上，为的是把自定义属性的失效
    范围关在这一层里。自定义属性是继承的：往 <html> 或 <body> 上写一次 --glow-strength，
    整棵树都要重算样式。2026-09-16 在首页量过，判据是「写一次变量再强制 layout 的耗时」，取
    三轮每帧平均：写在 <html> 上 12.7–16.6ms（页面约 5800–6000 个节点），写一个根本没人
@@ -184,24 +184,29 @@ body{background:var(--page);color:var(--ink);
    三层都只引用 --glow-* 变量，这里一个颜色都不写死：用户在设置面板里换配色时，改的就是
    那组变量，规则本身不动。插值空间走 --glow-lerp。
 
-   这一层画的就是侧栏玻璃面自带的那两团慢漂反光，换成用户配得了色的三枚。board.css 那条
+   这一层画的就是玻璃面自带的那两团慢漂反光，换成用户配得了色的三枚。board.css 那条
    玻璃规则把 --glass-drift-a/b 铺在每一块玻璃上，抽屉这一块交给这里来铺（侧栏岛的
    `sidebar.css` 因此把抽屉上的两个变量置为 none，两套光斑叠着漂会糊成一团）；搜索框、筛选浮层、图标钮
    那些玻璃面保持自己原来的漂移不动——它们身上那一点正是从侧栏折射过去的光。
-   正文身后什么都不铺：整条页面宽的光带是背景不是光晕，字压在上面读不出来。
+   挂这一层的面有两处：侧栏抽屉，和实体资料页顶上那块资料卡（`react/components/glow-layer.tsx`）。
+   卡片这一处是块面，不是整页：光晕被卡的 18px 圆角裁在卡里，浓淡与侧栏同一档
+   （`--glow-theme-scale`），卡上的字压在它之上照常读。整条页面宽的正文身后仍旧什么都不铺——
+   那种宽度的光带是背景不是光晕。
 
    位置不是参数，由 glowdriftx/glowdrifty 一直推着走，算法照搬 board.css 那两条：画布是
    元素的两倍大，background-position 从 0% 到 100% 正好把光斑中心从右下角推到左上角，
    -10% 与 110% 那两档让它探出框外一点。三枚各走一条相位不同的李萨如轨迹，横竖两条动画
    41s 与 67s 互质，合起来四十多分钟不重样。
-   z-index 取 -2：抽屉 #drawer 自己带 backdrop-filter，是一个层叠上下文，负层只压在它那块玻璃
-   填充之上、被导航内容全部盖住；-1 已经归了选中项那块玻璃 [data-sidebar-glide]，光晕要在它下面。
-   溢出由抽屉的 overflow:hidden 连圆角一起裁掉，这一层不必自己再写一遍圆角。
+   z-index 取 -2：宿主必须是层叠上下文，负层才压在宿主自己那块填充之上、被内容全部盖住。
+   抽屉靠 backdrop-filter 就是，资料卡在 `entity-hero.css` 里自己写 `isolation:isolate`；
+   抽屉那边 -1 也已经归了选中项那块玻璃 [data-sidebar-glide]，光晕要在它下面。
+   溢出由宿主的 overflow:hidden 连圆角一起裁掉，这一层不必自己再写一遍圆角。
    首屏 ambient-in 那一下淡入留着：这一层一直在动，开页时从 0 亮起来读成「灯亮了」，
-   直接带着满强度出现反而像一张贴图突然贴上去。 */
-.glowlayer{--ambient-opacity:calc(var(--glow-strength) * var(--glow-theme-scale));
+   直接带着满强度出现反而像一张贴图突然贴上去。变量由壳写到每一枚挂这一层的元素上；
+   首屏之后才画出来的那一枚，由挂载它的组件补写一次。 */
+[data-glow-layer]{--ambient-opacity:calc(var(--glow-strength) * var(--glow-theme-scale));
   position:absolute;inset:0;z-index:-2;pointer-events:none}
-.glowlayer::before{content:"";position:absolute;z-index:0;pointer-events:none;inset:0;
+[data-glow-layer]::before{content:"";position:absolute;z-index:0;pointer-events:none;inset:0;
   opacity:var(--ambient-opacity);background:
     radial-gradient(var(--glow-lerp) var(--glow-spot-1-w) var(--glow-spot-1-h) at 50% 50%,var(--glow-spot-1-color),transparent var(--glow-spot-1-fade)),
     radial-gradient(var(--glow-lerp) var(--glow-spot-2-w) var(--glow-spot-2-h) at 50% 50%,var(--glow-spot-2-color),transparent var(--glow-spot-2-fade)),
@@ -239,13 +244,13 @@ body{background:var(--page);color:var(--ink);
 @supports (background:linear-gradient(in oklab,red,blue)){:root{--glow-lerp:in oklab}}
 /* 颗粒感是可选的一层，默认强度 0 就是关。瓦片由 feTurbulence 当场生成，仓库里不落
    位图；overlay 只压在光晕上，导航内容在它之后绘制，不受影响。 */
-.glowlayer::after{content:"";position:absolute;z-index:0;pointer-events:none;inset:0;
+[data-glow-layer]::after{content:"";position:absolute;z-index:0;pointer-events:none;inset:0;
   opacity:var(--glow-noise);mix-blend-mode:overlay;
   background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='peachglowgrain'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23peachglowgrain)'/%3E%3C/svg%3E") 0 0/120px 120px repeat}
 @keyframes ambient-in{from{opacity:0}to{opacity:var(--ambient-opacity)}}
 /* 跟着动效偏好走：一屋子的光一直在挪是这块玻璃读成实物的理由，但 prefers-reduced-motion
    的人要的正是「别再动了」。停在当前那一帧，光还在，只是不动——整层关掉等于换了个配色。 */
-@media (prefers-reduced-motion:reduce){.glowlayer::before{animation:ambient-in .8s ease .5s both}}
+@media (prefers-reduced-motion:reduce){[data-glow-layer]::before{animation:ambient-in .8s ease .5s both}}
 .disp{font-family:Bahnschrift,"Segoe UI Variable Display","Microsoft YaHei UI",sans-serif;
   font-weight:600;letter-spacing:.02em}
 .mono{font-family:"Cascadia Mono",Consolas,ui-monospace,"Microsoft YaHei UI","PingFang SC",monospace;

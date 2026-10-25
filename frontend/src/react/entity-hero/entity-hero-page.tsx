@@ -6,6 +6,9 @@
  * 接在它后面、同一列里按列铺开，简介另占一行、排在头像下面（ADR-0116）。卡外面的交集条、筛选条
  * 与内容区仍归壳。
  *
+ * 卡面底下铺的是外观设置里那三枚光晕（`components/glow-layer.tsx`）：和侧栏抽屉同一层、同一套
+ * 配色，跟着卡的圆角一起裁。它只是背景，点不到，也不占任何几何。
+ *
  * 头像、同台艺人的脸和新作卡是拼好的 HTML（大位与新作卡由壳给，同台艺人的脸取自 `@peach/card-art`）：
  * 取图失败时兜底链（`card-art/image-fallback.ts`）会把 `<img>`
  * 从 DOM 里摘掉、人脸放大（`avatarFrame`）往图上写内联尺寸、等待微光挂在图的父元素上，这几样
@@ -18,6 +21,7 @@ import { entityPath, esc, firstGrapheme, icon } from '@peach/legacy/core';
 import { Button } from '@/components/base/buttons/button';
 
 import { AvatarPicker } from '../avatar-picker/avatar-picker-page';
+import { GlowLayer } from '../components/glow-layer';
 import { Note } from '../components/note';
 import { FavoriteButton } from '../library-shortcuts/shortcut-controls';
 import { busyProps } from '../settings/busy-props';
@@ -59,6 +63,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, actions,
   return (
     <>
       <section data-entity-card="" aria-label="资料">
+        <GlowLayer />
         <div data-entity-profile={facts.length ? 'facts' : ''}>
           <div data-entity-portrait-wrap="">
             <Portrait kind={kind} name={name} helpers={helpers} people={people} company={company} />

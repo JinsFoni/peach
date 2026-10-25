@@ -185,38 +185,40 @@ function normalizeHomeGlow(raw:unknown):HomeGlow{
 const glowChipFill=(colors:readonly string[]):string=>`conic-gradient(from -90deg,${colors.map((color,index)=>
   `${color} ${(index*100/colors.length).toFixed(3)}% ${((index+1)*100/colors.length).toFixed(3)}%`).join(',')})`;
 /* 只写值，光晕怎么画留在 web/css/01-base.css 一份。关掉和「玻璃原色」那一档都让强度与
-   颗粒归零，`.glowlayer::before` 的不透明度按那句乘法算成 0，不另设一个「关」的分支——
+   颗粒归零，`[data-glow-layer]::before` 的不透明度按那句乘法算成 0，不另设一个「关」的分支——
    否则「关着」「玻璃原色」和「强度 0」会是三条各自演化的路径。
 
    写之前先和上一次写进这枚元素的值比一遍。拖任意一条拉条时变的只有一个变量；不比就是
    每一步把九个都重设一遍，中间那八次全是白写。
-   记账按元素分开存，多个壳各画各的那一层时不会互相把对方的值判成「已经写过」。
+   记账按元素分开存：挂 `[data-glow-layer]` 的面不止一枚（侧栏抽屉、实体资料卡），各写各的一份，
+   新挂上来的一枚进这张表时是空的，于是一次就补齐，不会被别的层记过的那笔账判成「已经写过」。
 
    三条几何参数在这里换算成倍率：柔化 0–100 落在 0.7–1.3，收边位置按它缩放；大小同理
    落在 0.5–1.5，椭圆两根半轴同乘。速度是时长的倒数——拉条上的 100 是原速，所以倍率写成
    `100/speed`；拉到 0 没有倒数可言，那一档直接把漂移那两条动画暂停，淡入那一条不跟着停，
    否则整层会停在 opacity 0 上，看起来像光晕被关掉了。 */
 const glowWritten=new WeakMap<HTMLElement,Map<string,string>>();
-/** 光晕那一层的变量写到 `el` 上（同值不重写）。 */
-function paintHomeGlow(el:HTMLElement|null,glow:HomeGlow):void{
-  if(!el)return;
-  let written=glowWritten.get(el);
-  if(!written){written=new Map();glowWritten.set(el,written)}
+/** 光晕那一层的变量写到每一枚 `els` 上（同值不重写）。 */
+function paintHomeGlow(els:Iterable<HTMLElement>,glow:HomeGlow):void{
   const live=glow.on&&!isNativeGlass(glow.preset);
-  const write=(name:string,value:string)=>{
-    if(written.get(name)===value)return;
-    written.set(name,value);el.style.setProperty(name,value);
-  };
-  write('--glow-strength',String(live?glow.strength/100:0));
-  write('--glow-noise',String(live?glow.noise/100:0));
-  write('--glow-soften',(0.7+glow.soften/100*0.6).toFixed(3));
-  write('--glow-size',(0.5+glow.size/100).toFixed(3));
-  write('--glow-drift-scale',glow.speed?(100/glow.speed).toFixed(3):'1');
-  write('--glow-drift-play',glow.speed?'running':'paused');
-  HOME_GLOW_SPOTS.forEach((key,index)=>{
-    const spot=glow[key];
-    write(`--glow-spot-${index+1}-color`,glowRgba(spot.color,spot.alpha));
-  });
+  for(const el of els){
+    let written=glowWritten.get(el);
+    if(!written){written=new Map();glowWritten.set(el,written)}
+    const write=(name:string,value:string)=>{
+      if(written!.get(name)===value)return;
+      written!.set(name,value);el.style.setProperty(name,value);
+    };
+    write('--glow-strength',String(live?glow.strength/100:0));
+    write('--glow-noise',String(live?glow.noise/100:0));
+    write('--glow-soften',(0.7+glow.soften/100*0.6).toFixed(3));
+    write('--glow-size',(0.5+glow.size/100).toFixed(3));
+    write('--glow-drift-scale',glow.speed?(100/glow.speed).toFixed(3):'1');
+    write('--glow-drift-play',glow.speed?'running':'paused');
+    HOME_GLOW_SPOTS.forEach((key,index)=>{
+      const spot=glow[key];
+      write(`--glow-spot-${index+1}-color`,glowRgba(spot.color,spot.alpha));
+    });
+  }
 }
 
 /* 玻璃面上那两团慢漂反光的色相。侧栏那块玻璃交给光晕层，其余每一块（搜索框、顶栏图标

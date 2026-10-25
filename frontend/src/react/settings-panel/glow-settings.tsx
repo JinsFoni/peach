@@ -1,4 +1,4 @@
-/* 侧栏光晕的详细设置，照 feralui.dev/gradients 的工作台面板来：参数行是「84px 标签 + 自绘拉条 +
+/* 光晕的详细设置，照 feralui.dev/gradients 的工作台面板来：参数行是「84px 标签 + 自绘拉条 +
  * 右侧等宽读数」，颜色行点开在自己下方弹一张色板。
  * 取证见 docs/reference-snapshots/feralui-studio-boardui-accent-measured.md。
  *
@@ -84,14 +84,14 @@ export function GlowSettings({ host }: { host: SettingsPanelHost }) {
   const glow = host.store.value.homeGlow;
   const native = isNativeGlass(glow.preset);
   return (
-    <section data-glow-setting="" id="homeGlowControls" aria-label="侧栏光晕参数" hidden={!glow.on}>
+    <section data-glow-setting="" id="homeGlowControls" aria-label="光晕参数" hidden={!glow.on}>
       <section data-glow-group=""><h4>配色</h4>
         <p data-glow-current="">当前配色<b data-glow-preset-name="">{glowPresetName(glow.preset)}</b></p>
         <GlowPresetGrid store={host.store} label="光晕配色" />
         <p data-glow-native-note="" hidden={!native}>这一档用每块玻璃自带的反光，颜色跟着明暗主题走。</p>
         <div data-glow-fields="">
           {/* 拖动中只改参数、只排一帧重画；落盘留给松手那一下。其余玻璃面跟着走的只有速度，
-              而它那两枚变量只能写在根上，所以拖动期间只有侧栏那一层在变，松手才铺到整页。 */}
+              而它那两枚变量只能写在根上，所以拖动期间只有那几层光晕在变，松手才铺到整页。 */}
           {FIELDS.map(([field, label, max]) => (
             <DialRow key={field} field={field} label={label} max={max} value={glow[field]} hidden={native && field !== 'speed'}
               onStep={(value) => { host.store.value.homeGlow[field] = value; host.changed('glowFrame') }}

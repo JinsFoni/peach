@@ -350,7 +350,7 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
             </div>
             <ToggleRow id="uiSoundsSetting" title="界面音效" checked={settings.uiSounds}
               onToggle={(on) => { settings.uiSounds = on; save(); current.changed('uiSounds') }} />
-            <ToggleRow id="homeGlowSetting" title="侧栏光晕" checked={settings.homeGlow.on}
+            <ToggleRow id="homeGlowSetting" title="光晕" checked={settings.homeGlow.on}
               onToggle={(on) => { settings.homeGlow.on = on; save(); current.changed('glow') }} />
             <GlowSettings host={current} />
             <section data-sidebar-setting="" aria-labelledby="sidebarOrderTitle">

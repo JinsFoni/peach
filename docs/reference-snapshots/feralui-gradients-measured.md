@@ -57,9 +57,9 @@ JSON 导出里的 `stops[]` 一致。共十二档，每档四枚。
 1. **参数模型**：一档配色 = 若干色标（hex 加位置）+ 柔化 + 噪点。Peach 的 `homeGlow` 落成
    三枚光斑（颜色、不透明度、圆心、椭圆半轴、收边位置），开关、强度、噪点单列，
    见 `web/app.js` 的 `HOME_GLOW_PRESETS`。
-2. **`in oklab` 插值**：`web/css/01-base.css` 的 `.glowlayer::before` 三层渐变都走它，由
+2. **`in oklab` 插值**：`web/css/01-base.css` 的 `[data-glow-layer]::before` 三层渐变都走它，由
    `--glow-lerp` 一个变量给，`@supports` 判不出时退回 sRGB。
-3. **噪点叠层**：`.glowlayer::after` 一层 `mix-blend-mode: overlay` 的瓦片，强度 0 即关。瓦片由
+3. **噪点叠层**：`[data-glow-layer]::after` 一层 `mix-blend-mode: overlay` 的瓦片，强度 0 即关。瓦片由
    SVG `feTurbulence` 的 data URI 当场生成，不引入它那张 PNG，也不往仓库里落位图。
 
 渲染保持纯 CSS 径向光晕，不引入 Canvas：首页顶栏与筛选条都挂着 `backdrop-filter`，

@@ -1,10 +1,11 @@
 /* 光晕、玻璃面与强调色写到页面上，以及配色那几下点选。
  *
  * 光晕怎么算、怎么写在 `./home-glow.ts`：那一份不认识偏好对象，这里把当前设置和目标元素递进去。
- * 侧栏那一层写的是 `.glowlayer` 那枚空 div 而不是 <html>：自定义属性是继承的，写在根上整棵树都要
- * 重算样式，实测每帧 15ms 上下，拖动时帧预算当场就超；量法和数字记在 web/css/01-base.css 那条规则
- * 上面。一帧只写一次：指针拖动一秒能发上百个 pointermove，排进 requestAnimationFrame 之后写的就是
- * 这一帧真正要画的那一份。
+ * 光晕写的是页面上每一枚挂 `[data-glow-layer]` 的空 div（侧栏抽屉、实体资料卡），不写 <html>：自定义属性
+ * 是继承的，写在根上整棵树都要重算样式，实测每帧 15ms 上下，拖动时帧预算当场就超；量法和数字记在
+ * `web/css/01-base.css` 那条规则上面。一帧只写一次：指针拖动一秒能发上百个 pointermove，排进
+ * requestAnimationFrame 之后写的就是这一帧真正要画的那一份。页内后挂上来的那一枚（进到资料页才画出
+ * 来的卡）由 `react/components/glow-layer.tsx` 挂载时补一次，否则它读到的只是根上那份默认色。
  *
  * 其余玻璃面（搜索框、顶栏图标钮、筛选浮层、设置卡的分区导航、媒体库与配色弹层、窄栏、选择工具条）
  * 分散在整棵树上，没有共同的宿主，它们那两团反光的色相只能写在根上。写一次根就是整棵树重算样式，所以
@@ -22,13 +23,13 @@ import { appSettingsStore } from './settings';
 export interface GlowSettings { homeGlow: HomeGlow; accent: string }
 type GlowStore = SettingsStore<GlowSettings>;
 
-/** 侧栏光晕那一层当场写一次。启动时第一帧之前走这一条。 */
+/** 页面上每一枚光晕层当场写一次。启动时第一帧之前走这一条，后挂上来的层由挂载处补一次。 */
 export function paintHomeGlowNow(store: GlowStore = appSettingsStore()): void {
-  paintHomeGlow(document.querySelector<HTMLElement>('.glowlayer'), store.value.homeGlow);
+  paintHomeGlow(document.querySelectorAll<HTMLElement>('[data-glow-layer]'), store.value.homeGlow);
 }
 
 let glowFrame = 0;
-/** 排一帧重画侧栏光晕那一层；同一帧里再叫不另排。读的是那一帧时的设置。 */
+/** 排一帧重画所有光晕层；同一帧里再叫不另排。读的是那一帧时的设置。 */
 export function applyHomeGlow(store: GlowStore = appSettingsStore()): void {
   if (glowFrame) return;
   glowFrame = requestAnimationFrame(() => { glowFrame = 0; paintHomeGlowNow(store) });
