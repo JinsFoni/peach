@@ -821,8 +821,8 @@ Instagram 的独立用户登录会话未取得，自动适配器不进正式依�
   （`media=hls4/multi=…/_TPL_.<codec>.mp4.m3u8`，`_TPL_` 是档位占位符）：它列着这一条的每一
   档，含 1080p 与 4K，子清单是分片 MP4（av1）或 TS（h264）。取的时候 302 到
   `ip*.ahcdn.com`，`xhcdn.com` 与 `ahcdn.com` 都在这一来源的媒体白名单里，清单改写走
-  ADR-0114 那套；母清单整份交给播放器（ADR-0119），播放器按这一条的四秒分片升降档——
-  实测从 240p 起播，4.5 秒升到 1080p、9 秒升到 4K。渐进式 mp4（`downloadDropdownComponent.sources.mp4`）只到 720p，不采用。
+  ADR-0114 那套；母清单整份交给播放器（ADR-0119），播放器起播即钉这一条的最高档、四秒
+  分片跟着档位走（ADR-0120）。渐进式 mp4（`downloadDropdownComponent.sources.mp4`）只到 720p，不采用。
   token 与编解码绑定、由 UA 决定（标准 UA 拿 av1、Safari 拿 h265），所以先按 h264 换一次
   签，换不成才用页面给的那一档——换签失败是 `403 Wrong key`，不是限流。证据见
   [取证记录](reference-snapshots/follow-xhamster-creator.md)。

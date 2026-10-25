@@ -212,7 +212,7 @@ function fakePlayer(state: { time: number; duration: number }) {
 }
 
 describe('播放器清晰度', () => {
-  function menu(entries: QualityLevel[], selectedIndex = 0) {
+  function menu(entries: QualityLevel[], selectedIndex = -1) {
     configurePlayer(host());
     const root = document.createElement('div'), bar = document.createElement('div'), video = document.createElement('video');
     bar.className = 'vjs-control-bar';
@@ -268,6 +268,15 @@ describe('播放器清晰度', () => {
       view.notify('addqualitylevel');
       expect(view.labels()).toEqual(['自动', '360p', '1080p']);
       expect(view.bar.querySelector('[data-player-quality-option="auto"]')?.getAttribute('aria-checked')).toBe('true');
+    } finally { view.close() }
+  });
+
+  it('引擎钉在某一档时勾的是那一档，自动档让出勾选', () => {
+    const view = menu([{ width: 640, height: 360, enabled: true }, { width: 1920, height: 1080, enabled: true }], 1);
+    try {
+      view.open();
+      expect(view.bar.querySelector('[data-player-quality-option="1"]')?.getAttribute('aria-checked')).toBe('true');
+      expect(view.bar.querySelector('[data-player-quality-option="auto"]')?.getAttribute('aria-checked')).toBe('false');
     } finally { view.close() }
   });
 

@@ -74,16 +74,28 @@ describe('Video.js 10 播放会话', () => {
     player.dispose();
   });
 
-  it('清晰度选择排队后切换片源或销毁，不再写入旧引擎', async () => {
+  it('起播就钉最高档，切源后重新钉住', async () => {
+    const { player, media } = mounted();
+    player.src({ src: '/first.m3u8', type: 'application/vnd.apple.mpegurl' });
+    expect(media.engine.currentLevel).toBe(1);
+    expect(player.qualityLevels!().selectedIndex).toBe(1);
+    const levels = player.qualityLevels!();
+    levels[0]!.enabled = true; levels[1]!.enabled = true;
+    await Promise.resolve(); expect(media.engine.currentLevel).toBe(-1);
+    player.src({ src: '/second.m3u8', type: 'application/vnd.apple.mpegurl' });
+    expect(media.engine.currentLevel).toBe(1);
+    expect(player.qualityLevels!().selectedIndex).toBe(1);
+    player.dispose();
+  });
+
+  it('排队的清晰度选择不会写进已销毁的引擎', async () => {
     const { player, media } = mounted();
     player.src({ src: '/first.m3u8', type: 'application/vnd.apple.mpegurl' });
     const levels = player.qualityLevels!();
-    levels[0]!.enabled = false; levels[1]!.enabled = true;
-    player.src({ src: '/second.m3u8', type: 'application/vnd.apple.mpegurl' });
-    await Promise.resolve(); expect(media.engine.currentLevel).toBe(-1);
-    levels[0]!.enabled = false; levels[1]!.enabled = true;
+    levels[0]!.enabled = true; levels[1]!.enabled = true;
     player.dispose();
-    await Promise.resolve(); expect(media.engine.currentLevel).toBe(-1);
+    media.engine.currentLevel = 0;
+    await Promise.resolve(); expect(media.engine.currentLevel).toBe(0);
   });
 
   it('HLS 与 DASH 切源保留原生视频和字幕，销毁停播并解除事件', () => {

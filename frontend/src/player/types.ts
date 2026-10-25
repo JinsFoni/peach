@@ -11,7 +11,12 @@ export interface QualityLevelList {
   on?(events: PlayerEvents, handler: () => void): void;
 }
 
-export interface PlayerSource { src: string; type: string }
+export interface PlayerSource {
+  src: string;
+  type: string;
+  /** HLS 引擎是否按播放器尺寸封顶码率；Peach 不封顶，小窗口里也放最高档。 */
+  capRenditionToPlayerSize?: boolean;
+}
 
 export interface VjsPlayer {
   /** 挂载时记下的条目：右键菜单复制网址按它取 id。 */

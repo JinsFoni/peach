@@ -97,7 +97,14 @@ export const createV10Player: VideojsFactory = (video, options) => {
   }, { signal });
   const levels = [] as unknown as QualityLevelList;
   const boundEngines = new WeakSet<HlsEngine>();
-  let enabledLevels: boolean[] = [], selectionQueued = false;
+  let enabledLevels: boolean[] = [], selectionQueued = false, chosenByViewer = false;
+  /** 钉在哪一档；自动档为 null。引擎的 `currentLevel` 要等切过去才认，面板读这个。 */
+  let pinnedLevel: number | null = null;
+  /** 一档的像素数：宽高取小的那个，缺尺寸时算 0。 */
+  const resolution = (level: { width?: number; height?: number }): number => {
+    const values = [Number(level.width), Number(level.height)].filter((value) => value > 0);
+    return values.length ? Math.min(...values) : 0;
+  };
   const syncLevels = () => {
     const engine = media.engine;
     if (!engine || !Array.isArray(engine.levels)) return;
@@ -107,6 +114,7 @@ export const createV10Player: VideojsFactory = (video, options) => {
       levels[index] = { ...level, get enabled() { return enabledLevels[index] ?? true },
         set enabled(value: boolean) {
           enabledLevels[index] = value;
+          chosenByViewer = true;
           if (selectionQueued) return;
           selectionQueued = true;
           const generation = sourceGeneration;
@@ -114,22 +122,39 @@ export const createV10Player: VideojsFactory = (video, options) => {
             if (disposed || media.engine !== engine || generation !== sourceGeneration) return;
             selectionQueued = false;
             const selected = enabledLevels.flatMap((enabled, at) => enabled ? [at] : []);
-            engine.currentLevel = selected.length === 1 ? selected[0]! : -1;
+            pinnedLevel = selected.length === 1 ? selected[0]! : null;
+            engine.currentLevel = pinnedLevel ?? -1;
           });
         } };
     }
     levels.length = engine.levels.length;
-    levels.selectedIndex = engine.currentLevel;
+    levels.selectedIndex = pinnedLevel ?? -1;
     emit('qualitychange');
   };
   levels.on = (_names, callback) => events.addEventListener('qualitychange', callback, { signal });
+  /* 起播就放最高那一档：档位一出来就钉住，之后不随网速换档。观众在面板里点过档位之后
+     就不再插手，单一档位的片源没有可选的东西。 */
+  const pickHighest = (engine: HlsEngine) => {
+    if (chosenByViewer || !levels.length) return;
+    if (levels.length < 2) return;
+    let best = 0, pixels = resolution(levels[0]!);
+    for (let index = 1; index < levels.length; index++) {
+      const candidate = resolution(levels[index]!);
+      if (candidate > pixels) { best = index; pixels = candidate }
+    }
+    pinnedLevel = best;
+    engine.currentLevel = best;
+    syncLevels();
+  };
   const attachEngine = () => {
     const engine = media.engine;
     if (engine && Array.isArray(engine.levels) && !boundEngines.has(engine)) {
       boundEngines.add(engine);
-      engine.on('hlsManifestParsed', syncLevels); engine.on('hlsLevelSwitched', syncLevels);
+      engine.on('hlsManifestParsed', () => { syncLevels(); pickHighest(engine) });
+      engine.on('hlsLevelSwitched', syncLevels);
     }
     syncLevels();
+    if (engine) pickHighest(engine);
   };
   video.addEventListener('loadedmetadata', attachEngine, { signal });
   const player = {
@@ -164,16 +189,18 @@ export const createV10Player: VideojsFactory = (video, options) => {
     poster: (url: string) => { video.poster = url },
     src: (next: PlayerSource) => {
       source = next; failure = null; root.classList.remove('vjs-error');
-      sourceGeneration++; playGeneration++; selectionQueued = false; enabledLevels = []; levels.length = 0;
+      sourceGeneration++; playGeneration++; selectionQueued = false; chosenByViewer = false;
+      pinnedLevel = null; enabledLevels = []; levels.length = 0;
       const tag = next.type.toLowerCase().includes('dash') ? 'dash-video' : 'hlsjs-video';
       if (media.localName !== tag) {
         const previous = media;
         media = document.createElement(tag) as MediaElement;
         previous.replaceWith(media); media.append(video); previous.adapter.destroy();
         media.addEventListener('error', () => showError(media.error || video.error), { signal });
-        enabledLevels = []; levels.length = 0;
+        pinnedLevel = null; enabledLevels = []; levels.length = 0;
       }
-      media.source = { ...next, src: new URL(next.src, location.href).href };
+      /* 不按播放器尺寸封顶码率：小窗口里也放最高档，自动档同样只按实测网速选。 */
+      media.source = { ...next, src: new URL(next.src, location.href).href, capRenditionToPlayerSize: false };
       attachEngine();
     },
     currentSrc: () => source.src, currentSource: () => source,

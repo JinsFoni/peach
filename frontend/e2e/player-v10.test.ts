@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Browser } from 'playwright-core';
@@ -13,11 +13,26 @@ describe('Video.js 10 播放链', () => {
   let browser: Browser;
   let fixture: string;
   let files: Map<string, Buffer>;
+  let clips: Map<string, Buffer>;
+  let ladder: string;
   before(async () => {
     fixture = realpathSync(mkdtempSync(join(tmpdir(), 'peach-v10-hls-')));
     execFileSync(requiredEnv('PEACH_E2E_FFMPEG'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
       '-i', 'testsrc2=size=160x90:rate=15', '-t', '3', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
       '-f', 'hls', '-hls_time', '1', '-hls_list_size', '0', '-hls_segment_filename', join(fixture, 'part-%d.ts'), join(fixture, 'video.m3u8')]);
+    // 两档母清单：低档 160x90、高档 320x180，各一条独立的 HLS。
+    clips = new Map();
+    for (const [dir, size] of [['low', '160x90'], ['high', '320x180']] as const) {
+      mkdirSync(join(fixture, dir), { recursive: true });
+      execFileSync(requiredEnv('PEACH_E2E_FFMPEG'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+        '-i', `testsrc2=size=${size}:rate=15`, '-t', '3', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-f', 'hls', '-hls_time', '1', '-hls_list_size', '0',
+        '-hls_segment_filename', join(fixture, dir, 'part-%d.ts'), join(fixture, dir, 'video.m3u8')]);
+      for (const name of readdirSync(join(fixture, dir))) clips.set(`${dir}/${name}`, readFileSync(join(fixture, dir, name)));
+    }
+    ladder = ['#EXTM3U',
+      '#EXT-X-STREAM-INF:BANDWIDTH=150000,RESOLUTION=160x90', '/v10-clips/low/video.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=320x180', '/v10-clips/high/video.m3u8', ''].join('\n');
     execFileSync(requiredEnv('PEACH_E2E_FFMPEG'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
       '-i', 'testsrc2=size=160x90:rate=15', '-t', '3', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
       '-f', 'dash', 'video.mpd'], { cwd: fixture });
@@ -65,6 +80,52 @@ describe('Video.js 10 播放链', () => {
       assert.equal((await activity).status(), 200);
       await page.locator('#closeStage').click();
       await page.locator('.video-js').waitFor({ state: 'detached' });
+      assert.deepEqual(problems, []);
+    } finally { await opened.close() }
+  });
+
+  it('两档母清单起播就放最高那一档，面板也勾着它', { timeout: 60_000 }, async () => {
+    // 手机视口：按播放器尺寸封顶的话最高只能到低档，播到 180p 才说明没有封顶。
+    const opened = await openFollowFeed(browser, `/posts/${DETAIL.collection}`, VIEWPORTS[1]!, { ready: '#stage [data-follow-detail-side]' });
+    const { page, problems } = opened;
+    try {
+      const response = page.waitForResponse(reply => {
+        const url = new URL(reply.url()); return url.pathname === '/api/follow' && url.searchParams.get('item') === String(DETAIL.collection);
+      });
+      await page.reload();
+      const payload = await (await response).json();
+      payload.groups[0].primary.media_type = 'application/vnd.apple.mpegurl'; payload.groups[0].primary.duration = 3;
+      await page.route(url => url.pathname === '/api/follow' && url.searchParams.has('item'), route => route.fulfill({ json: payload }));
+      await page.route('**/api/follow/play', route => route.fulfill({ json: { ok: true } }));
+      await page.route('**/api/follow/activity', route => route.fulfill({ json: { ok: true, item: DETAIL.collection } }));
+      await page.route('**/follow-stream**', route => route.fulfill({ body: ladder, contentType: 'application/vnd.apple.mpegurl' }));
+      await page.route('**/v10-clips/**', route => {
+        const name = new URL(route.request().url()).pathname.replace('/v10-clips/', '');
+        const body = clips.get(name);
+        assert.ok(body, `没有这份档位片段：${name}`);
+        return route.fulfill({ body, contentType: name.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t' });
+      });
+      await page.reload();
+      await page.locator('#stage hlsjs-video > video.vjs-tech').waitFor();
+      await page.locator('#stage video.vjs-tech').evaluate((node: HTMLVideoElement) => { node.muted = true });
+      await page.locator('#stage media-play-button').click();
+      await page.waitForFunction(() => {
+        const video = document.querySelector<HTMLVideoElement>('#stage video.vjs-tech');
+        return !!video && video.currentTime > .2 && video.videoHeight === 180;
+      }, undefined, { timeout: 15_000 });
+      const engine = await page.locator('#stage hlsjs-video').evaluate((node) => {
+        const hls = (node as unknown as { engine: { levels: { height?: number }[]; currentLevel: number; autoLevelEnabled: boolean } }).engine;
+        return { heights: hls.levels.map((level) => level.height), current: hls.currentLevel, auto: hls.autoLevelEnabled };
+      });
+      assert.deepEqual(engine.heights, [90, 180], '母清单的两档没有都进引擎');
+      assert.equal(engine.current, 1, '起播没有放最高那一档');
+      assert.equal(engine.auto, false, '最高档没有被钉住，仍随网速换档');
+      await page.locator('#stage [data-player-quality] > button').click();
+      assert.match(await page.locator('#stage [data-player-quality-view] b').textContent() || '', /180p/, '主菜单没显示当前档位');
+      await page.locator('#stage [data-player-quality-view]').click();
+      const checked = await page.locator('#stage [data-player-quality-option][aria-checked="true"]').textContent();
+      assert.match(checked || '', /180p/, '面板里勾的不是最高那一档');
+      await page.locator('#stage video.vjs-tech').evaluate((node: HTMLVideoElement) => node.pause());
       assert.deepEqual(problems, []);
     } finally { await opened.close() }
   });
