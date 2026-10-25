@@ -2356,6 +2356,68 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(segment.content, b"segment")
         self.assertEqual(segment.headers["content-type"], "video/mp2t")
 
+    async def test_a_segment_is_kept_for_the_browser_but_a_playlist_is_not(self):
+        """分片的键是上游地址的摘要，同一把键永远同一段字节：浏览器留着就能回拖。
+
+        清单自己随签名变，仍是一次性的；带 `content-range` 的部分响应也不留——只存半段
+        会让后面的请求对不上。
+        """
+        from peach.follow_stream import ResolvedFollowMedia
+
+        self._save_hls_item()
+        master = b"#EXTM3U\n#EXTINF:8.0,\nseg-1.ts\n"
+
+        def upstream(request):
+            if request.url.path.endswith("master.m3u8"):
+                return httpx.Response(200, stream=httpx.ByteStream(master), request=request,
+                                      headers={"content-type": "application/vnd.apple.mpegurl"})
+            if request.headers.get("range"):
+                return httpx.Response(206, stream=httpx.ByteStream(b"seg"), request=request,
+                                      headers={"content-type": "video/mp2t", "content-range": "bytes 0-2/7"})
+            return httpx.Response(200, stream=httpx.ByteStream(b"segment"), request=request,
+                                  headers={"content-type": "video/mp2t", "content-length": "7"})
+
+        resolved = ResolvedFollowMedia(
+            "https://ev-h.phncdn.com/hls/720/master.m3u8?validto=2",
+            "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+            allowed_hosts=("phncdn.com",), playlist=True)
+        original = self.app.state.http_transport.client
+        fake = httpx.Client(transport=httpx.MockTransport(upstream), follow_redirects=True)
+        self.app.state.http_transport.client = fake
+        try:
+            with patch.object(self.app.state.follow_media_resolver, "resolve", return_value=resolved):
+                played = await self.client.get("/follow-stream?id=9&t=secret")
+            child = [line for line in played.text.splitlines()
+                     if line and not line.startswith("#")][0]
+            segment = await self.client.get(f"{child}&t=secret")
+            partial = await self.client.get(f"{child}&t=secret", headers={"range": "bytes=0-2"})
+        finally:
+            self.app.state.http_transport.client = original
+            fake.close()
+        self.assertEqual(played.headers["cache-control"], "private, no-store")
+        self.assertEqual(segment.headers["cache-control"], "private, max-age=3600, immutable")
+        self.assertEqual(partial.headers["cache-control"], "private, no-store")
+
+    async def test_the_codec_the_browser_names_is_passed_to_the_resolver(self):
+        """浏览器报得出能解 av1 就点名要 av1 那条梯子；认不出的当作没点名。"""
+        from peach.follow_stream import ResolvedFollowMedia
+
+        self._save_hls_item()
+        resolved = ResolvedFollowMedia(
+            "https://ev-h.phncdn.com/hls/720/master.m3u8?validto=2",
+            "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+            allowed_hosts=("phncdn.com",), playlist=True)
+        asked = []
+
+        def resolve(item, media=None, quality=None, prefer_codec=None):
+            asked.append(prefer_codec)
+            return resolved
+
+        with patch.object(self.app.state.follow_media_resolver, "resolve", side_effect=resolve):
+            await self.client.get("/follow-qualities?id=9&codec=av1&t=secret")
+            await self.client.get("/follow-qualities?id=9&codec=vp9&t=secret")
+        self.assertEqual(asked, ["av1", None])
+
     def _save_hls_item(self) -> None:
         """一条只有 HLS 的关注条目，让 `/follow-stream` 有据可查。"""
         connection = sqlite3.connect(self.db)

@@ -8,7 +8,8 @@ import { averageBitrate, bufferedAhead, fmtLoadRate, pushPlayerStat } from '../s
 import {
   cancelDetailStream, detailStreamSource, detailStreamSession, directStreamSource, playableStreamSource,
 } from '../src/player/stream';
-import { mountPlayer } from '../src/player/detail-player';
+import { mountDetailPlayer, mountPlayer } from '../src/player/detail-player';
+import { setDetailPlayer } from '../src/player/registry';
 import { wireTelemetry } from '../src/player/telemetry';
 import type { QualityLevel, QualityLevelList, VjsPlayer } from '../src/player/types';
 import * as videojsLoader from '../src/player/videojs';
@@ -43,6 +44,17 @@ describe('片源判据', () => {
     const source = await playableStreamSource({ id: 7, location: 'online', follow_item_id: 42 }, 's1');
     expect(source).toEqual({ src: '/follow-stream?id=42', type: 'video/mp4' });
     expect(calls).toEqual([]);
+  });
+
+  it('浏览器报得出能解 AV1 就点名要那一条梯子，报不出来就不点名', async () => {
+    const supported = vi.fn(() => true);
+    vi.stubGlobal('MediaSource', { isTypeSupported: supported });
+    expect(await playableStreamSource({ id: 7, location: 'online', follow_item_id: 42 }, 's1'))
+      .toEqual({ src: '/follow-stream?id=42&codec=av1', type: 'video/mp4' });
+    expect(supported).toHaveBeenCalledWith('video/mp4; codecs="av01.0.05M.08"');
+    supported.mockReturnValue(false);
+    expect(await playableStreamSource({ id: 7, location: 'online', follow_item_id: 42 }, 's2'))
+      .toEqual({ src: '/follow-stream?id=42', type: 'video/mp4' });
   });
 
   it('服务端要转码分片就给分片；计划取不到就带会话直读，webm 按扩展名给类型', async () => {
@@ -368,5 +380,63 @@ describe('外挂字幕', () => {
       [{ kind: 'subtitles', src: '/sub/1.vtt', srclang: 'zh', label: '简体', default: false }, true],
       [{ kind: 'subtitles', src: '/sub/3.vtt', srclang: '', label: '繁体', default: false }, true],
     ]);
+  });
+});
+
+describe('关注条目出错时不换成直读', () => {
+  /** 挂得上详情播放器的壳：记下每一次挂的片源，`error` 由用例触发。 */
+  function shellPlayer() {
+    const sources: unknown[] = [];
+    const handlers = new Map<string, (() => void)[]>();
+    const root = document.createElement('div');
+    const player = {
+      el: () => root, isDisposed: () => false, off: () => {}, ready: () => {},
+      on: (events: string | string[], fn: () => void) => {
+        for (const event of [events].flat()) handlers.set(event, [...handlers.get(event) || [], fn]);
+      },
+      one: (event: string, fn: () => void) => handlers.set(event, [...handlers.get(event) || [], fn]),
+      duration: () => 600,
+      currentTime: () => 0,
+      currentSource: () => ({ type: 'application/vnd.apple.mpegurl' }),
+      src: (source?: unknown) => { if (source !== undefined) sources.push(source); return sources.at(-1) },
+      play: () => Promise.resolve(),
+    } as unknown as VjsPlayer;
+    player.peachItem = { id: 12, duration: 600 };
+    vi.spyOn(videojsLoader, 'ensureVideojs').mockResolvedValue(() => player);
+    const fire = (event: string) => handlers.get(event)?.forEach((fn) => fn());
+    return { player, sources, fire };
+  }
+
+  it('追更片源本身就是远端清单，出错也不许换成 `/stream`', async () => {
+    configurePlayer(host());
+    setDetailPlayer(null);
+    const { player, sources, fire } = shellPlayer();
+    const source = { src: '/follow-stream?id=12', type: 'application/vnd.apple.mpegurl' };
+    await mountDetailPlayer({ id: 12, duration: 600 }, document.createElement('video'), false,
+      { source, checkSourceStatus: false });
+    await flush();
+    expect(sources).toEqual([source]);
+    fire('error');
+    // 本地库里没有这一条：换过去只会 404 黑屏，所以这里一次都不该再挂片源。
+    expect(sources).toEqual([source]);
+    setDetailPlayer(null);
+    expect(player.isDisposed()).toBe(false);
+  });
+
+  it('本地转码出来的分片出错仍退回直读原文件', async () => {
+    configurePlayer(host());
+    setDetailPlayer(null);
+    const { sources, fire } = shellPlayer();
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(
+      JSON.stringify(url.startsWith('/api/stream-plan')
+        ? { protocol: 'hls', src: '/stream/hls/13/index.m3u8' } : null),
+      { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await mountDetailPlayer({ id: 13, duration: 600 }, document.createElement('video'), false, {});
+    await flush();
+    expect(sources.at(-1)).toEqual({ src: '/stream/hls/13/index.m3u8', type: 'application/vnd.apple.mpegurl' });
+    fire('error');
+    expect(sources.at(-1)).toEqual({
+      src: expect.stringMatching(/^\/stream\?id=13&session=/), type: 'video/mp4' });
+    setDetailPlayer(null);
   });
 });

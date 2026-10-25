@@ -9,7 +9,10 @@ videoListProps.videoThumbProps`，每项带 `id`、`duration`（秒）、`create
 测试本身不联网：transport 全部注入。
 """
 import json
+import tempfile
+import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from peach import follow_assets, follow_providers, follow_secrets
@@ -18,8 +21,8 @@ from peach.follow_sources import (
     FollowSourceError, build_connector, parse_source_url, xhamster_listing,
 )
 from peach.follow_stream import (
-    FollowMediaResolver, FollowMediaUnavailable, media_type, resolvable_at_play,
-    xhamster_hls_codecs, xhamster_hls_master, xhamster_hls_variants,
+    FollowMediaResolver, FollowMediaUnavailable, ResolvedFollowMedia, media_type,
+    resolvable_at_play, xhamster_hls_codecs, xhamster_hls_master, xhamster_hls_variants,
 )
 from peach.http import HttpResponse
 
@@ -264,11 +267,19 @@ class PlaylistTests(unittest.TestCase):
                 master, "https://video7.xhcdn.com/key=a/media=hls4/x/_TPL_.av1.mp4.m3u8"),
             ((1080, "https://video7.xhcdn.com/key=RJej/media=hls4/x/1080p.av1.mp4.m3u8"),))
 
-    def test_h264_is_tried_first_and_the_page_codec_is_the_fallback(self):
-        """Safari 解不了 av1：能换签就用 h264，换不成就用页面自己那一档。"""
+    def test_the_codec_the_browser_names_goes_first_and_h264_is_the_fallback(self):
+        """两条梯子分辨率一样，av1 的字节只有 h264 的三分之一上下：浏览器报得出能解就先用它。
+
+        没点名、点名的是 h264、或者报了个认不出的，仍旧落到 h264——换签一次就能成功的那档。
+        """
+        self.assertEqual(xhamster_hls_codecs("av1", "av1"), ("av1", "h264"))
+        self.assertEqual(xhamster_hls_codecs("h264", "av1"), ("av1", "h264"))
+        self.assertEqual(xhamster_hls_codecs("h265", "av1"), ("av1", "h264", "h265"))
+        self.assertEqual(xhamster_hls_codecs("av1", "h265"), ("h265", "h264", "av1"))
         self.assertEqual(xhamster_hls_codecs("av1"), ("h264", "av1"))
         self.assertEqual(xhamster_hls_codecs("h265"), ("h264", "h265"))
         self.assertEqual(xhamster_hls_codecs("h264"), ("h264",))
+        self.assertEqual(xhamster_hls_codecs("av1", "vp9"), ("h264", "av1"))
 
 
 class MediaTests(unittest.TestCase):
@@ -328,6 +339,37 @@ class MediaTests(unittest.TestCase):
         with self.assertRaises(FollowMediaUnavailable):
             self._resolver(page=WATCH_WITHOUT_PLAYLIST).resolve(self._item())
 
+    def test_the_browser_named_codec_resolves_to_its_own_ladder(self):
+        """页面给 Chrome 签的是 av1：点名 av1 就解析那条梯子，两条各占一格、互不顶掉。"""
+        page = WATCH.replace("_TPL_.h264", "_TPL_.av1")
+        asked = []
+
+        def transport(request, timeout, max_bytes):
+            asked.append(request.url)
+            if "_TPL_.av1.mp4.m3u8" in request.url:
+                return HttpResponse(200, {}, _master("av1"))
+            if "_TPL_.h264.mp4.m3u8" in request.url:
+                return HttpResponse(200, {}, _master("h264"))
+            return HttpResponse(200, {}, page.encode("utf-8"))
+
+        resolver = FollowMediaResolver(transport)
+        item = self._item()
+        self.assertEqual(resolver.resolve(item, prefer_codec="av1").url,
+                         f"{FRONT}/_TPL_.av1.mp4.m3u8")
+        self.assertEqual(resolver.resolve(item).url, f"{FRONT}/_TPL_.h264.mp4.m3u8")
+        settled = len(asked)
+        self.assertEqual(resolver.resolve(item, prefer_codec="av1").url,
+                         f"{FRONT}/_TPL_.av1.mp4.m3u8")
+        self.assertEqual(resolver.resolve(item).url, f"{FRONT}/_TPL_.h264.mp4.m3u8")
+        self.assertEqual(len(asked), settled)
+
+    def test_a_refused_swap_for_the_named_codec_falls_back_to_h264(self):
+        """点名 av1 但换签换不成（`403 Wrong key`）：落到 h264，这一条照常能播。"""
+        resolver = self._resolver(masters={"_TPL_.av1.mp4.m3u8": (403, b"Wrong key"),
+                                           "_TPL_.h264.mp4.m3u8": (200, _master())})
+        self.assertEqual(resolver.resolve(self._item(), prefer_codec="av1").url,
+                         f"{FRONT}/_TPL_.h264.mp4.m3u8")
+
     def test_a_master_without_variants_reports_unavailable(self):
         with self.assertRaises(FollowMediaUnavailable):
             self._resolver(masters={"_TPL_.h264.mp4.m3u8": (200, b"#EXTM3U\n")}).resolve(self._item())
@@ -346,6 +388,87 @@ class MediaTests(unittest.TestCase):
         self.assertFalse(resolvable_at_play("xhamster", "https://elsewhere.example/creators/x-1"))
         # 站点地址不可信时不去解析详情页。
         self.assertFalse(resolvable_at_play("kemono", CREATOR))
+
+
+class PlaybackPersistenceTests(unittest.TestCase):
+    """到期时刻写在路径里的那种地址（`…==,1792926000/media=hls4/…`）也要落盘。
+
+    只认 `validto=`／`end=` 的那一版认不出它，于是每打开一次都要重抓一次作品页，
+    起播白等两秒——这条来源的全部地址都是这个写法。
+    """
+
+    def _front(self, seconds: int = 3600) -> str:
+        return FRONT.replace("1792854000", str(int(time.time()) + seconds))
+
+    def _item(self) -> SimpleNamespace:
+        return SimpleNamespace(id=5, provider="xhamster", url=WATCH_URL,
+                               media_url=None, metadata={"media_kind": "video"},
+                               external_id="31389143")
+
+    def _entries(self, root: str) -> list[str]:
+        return sorted(path.name for path
+                      in (Path(root) / FollowMediaResolver.PLAYBACK_DIR).glob("*.json"))
+
+    def _expiry(self, front: str) -> int:
+        """地址里 token 后面那个逗号跟着的就是到期时刻。"""
+        return int(front.split("==", 1)[1].split(",", 1)[1].split("/", 1)[0])
+
+    def test_the_expiry_stamped_in_the_path_is_read(self):
+        front = self._front()
+        expiry = self._expiry(front)
+        resolved = ResolvedFollowMedia(f"{front}/_TPL_.h264.mp4.m3u8", WATCH_URL,
+                                       qualities=((2160, f"{front}/2160p.h264.mp4.m3u8"),),
+                                       allowed_hosts=("xhcdn.com",), playlist=True)
+        self.assertEqual(FollowMediaResolver.playback_expiry(resolved), expiry)
+
+    def test_the_master_is_written_down_and_reused_without_a_page_fetch(self):
+        front = self._front()
+        page = WATCH.replace(FRONT, front)
+        asked = []
+
+        def transport(request, timeout, max_bytes):
+            asked.append(request.url)
+            if "_TPL_" in request.url:
+                return HttpResponse(200, {}, _master())
+            return HttpResponse(200, {}, page.encode("utf-8"))
+
+        with tempfile.TemporaryDirectory() as root:
+            resolved = FollowMediaResolver(transport, state_root=root).resolve(self._item())
+            self.assertEqual(resolved.url, f"{front}/_TPL_.h264.mp4.m3u8")
+            self.assertEqual(self._entries(root), ["5.json"])
+
+            later = []
+
+            def warm(request, timeout, max_bytes):
+                later.append(request.url)
+                return HttpResponse(500, {}, b"")
+
+            again = FollowMediaResolver(warm, state_root=root).resolve(self._item())
+        # 一个请求都没发：地址还没过期，盘上那份直接能用。
+        self.assertEqual(later, [])
+        self.assertEqual(again.url, f"{front}/_TPL_.h264.mp4.m3u8")
+        self.assertEqual([height for height, _url in again.qualities], [2160, 1080, 480, 144])
+
+    def test_the_two_ladders_keep_their_own_file(self):
+        front = self._front()
+        page = WATCH.replace("_TPL_.h264", "_TPL_.av1").replace(FRONT, front)
+
+        def transport(request, timeout, max_bytes):
+            if "_TPL_.av1.mp4.m3u8" in request.url:
+                return HttpResponse(200, {}, _master("av1"))
+            if "_TPL_.h264.mp4.m3u8" in request.url:
+                return HttpResponse(200, {}, _master("h264"))
+            return HttpResponse(200, {}, page.encode("utf-8"))
+
+        with tempfile.TemporaryDirectory() as root:
+            resolver = FollowMediaResolver(transport, state_root=root)
+            resolver.resolve(self._item(), prefer_codec="av1")
+            resolver.resolve(self._item())
+            self.assertEqual(self._entries(root), ["5.av1.json", "5.json"])
+            # 上游拒收清单时按条目 id 丢：调用方不知道这次是哪个浏览器在放，两条都丢。
+            self.assertTrue(resolver.forget(5))
+            self.assertEqual(self._entries(root), [])
+            self.assertFalse(resolver.forget(5))
 
 
 if __name__ == "__main__":

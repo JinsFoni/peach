@@ -17,11 +17,23 @@ export function directStreamSource(item: PlayerItem, session: string): PlayerSou
   };
 }
 
+/** 浏览器能解 AV1 就点名要那一条梯子。
+ *
+ *  同一部片子的 av1 与 h264 梯子档位分辨率一样，码率只有三分之一上下：2160p 实测一段四秒
+ *  是 1.0 与 4.6 MB，起播和拖动都落在这个差上。服务端换签换不成就退回 h264，所以这里只报
+ *  能力、不担心取不到。 */
+export function codecQuery(): string {
+  try {
+    const source = globalThis.MediaSource;
+    return source?.isTypeSupported?.('video/mp4; codecs="av01.0.05M.08"') ? '&codec=av1' : '';
+  } catch { return '' }
+}
+
 /* 在线作品的 `path` 是来源作品页，不是可播地址。能播的那条代理在 `/follow-stream?id=<follow_item>`，
    保存时写了 `follow_item.asset_id`，`/api/item` 反查后回传 `follow_item_id`。 */
 function followStreamSource(item: PlayerItem): PlayerSource | null {
   return item.location === 'online' && item.follow_item_id
-    ? { src: `/follow-stream?id=${item.follow_item_id}`,
+    ? { src: `/follow-stream?id=${item.follow_item_id}${codecQuery()}`,
         type: item.follow_media_type || 'video/mp4' } : null;
 }
 
