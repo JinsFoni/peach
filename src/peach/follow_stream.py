@@ -251,6 +251,8 @@ class FollowMediaResolver:
         #: (条目 id, 清单根地址) → (过期时刻, 并好的母清单)。同一档的母清单每次都要多取
         #: 几次，而播放器可能连着要两三遍。根地址里带着编解码与签名，两条梯子不会串。
         self._masters: dict[tuple[int, str], tuple[float, bytes]] = {}
+        #: 改写前的清单正文，起播这一路每来一遍就要一次母清单加一次子清单。
+        self.playlists = PlaylistMemory()
         #: 上一次清扫落盘目录的时刻（`_sweep_playback`）。
         self._swept = 0.0
         self._lock = threading.Lock()
@@ -359,6 +361,7 @@ class FollowMediaResolver:
             masters = [key for key in self._masters if key[0] == item_id]
             for key in masters:
                 dropped = self._masters.pop(key, None) is not None or dropped
+        dropped = self.playlists.forget(item_id) or dropped
         for path in self._playback_item_paths(item_id):
             dropped = self._drop_path(path) or dropped
         return dropped
@@ -929,6 +932,56 @@ class FollowMediaResolver:
             return False
         return (response.status == 200
                 and response.body.lstrip().startswith(b"#EXTM3U"))
+
+
+class PlaylistMemory:
+    """清单正文在内存里留一小会儿：母清单按上游地址留，子清单按它在清单里的那一跳留。
+
+    点播清单在签名有效期内一个字节都不变，而播放器一次起播要依次来要母清单、子清单，
+    重开同一条又是同两份。每趟都回源的话，起播前那几百毫秒与用户无关，全是白等的往返。
+    留的是**改写前**的正文：改写结果依赖逐跳短键，键每次重新生成，留着正文每次重写一遍
+    不到一毫秒；留下改写后的文本反而会把过期的键发出去。
+
+    容量按「几屏反复点开」定，超了先丢最早写进来的；`forget()` 按条目 id 整条清掉。
+    """
+
+    #: 与母清单并列的期限：签名通常还剩一小时上下，留两分钟足够一次起播与一次重开，
+    #: 又不至于把已经换过签名的正文当成新地址发出去。
+    TTL = 120.0
+    CAPACITY = 256
+
+    def __init__(self, *, ttl: float = TTL, capacity: int = CAPACITY,
+                 clock: Callable[[], float] = time.monotonic):
+        self.ttl = ttl
+        self.capacity = capacity
+        self.clock = clock
+        self._rows: OrderedDict[tuple[int, str, str], tuple[float, str, bytes]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[int, str, str]) -> tuple[str, bytes] | None:
+        """取回 (取它时的地址, 正文)；没有或已过期返回 None。"""
+        with self._lock:
+            row = self._rows.get(key)
+            if row is None or row[0] <= self.clock():
+                return None
+            self._rows.move_to_end(key)
+            return row[1], row[2]
+
+    def put(self, key: tuple[int, str, str], base: str, body: bytes) -> None:
+        with self._lock:
+            self._rows[key] = (self.clock() + self.ttl, base, body)
+            self._rows.move_to_end(key)
+            while len(self._rows) > self.capacity:
+                self._rows.popitem(last=False)
+
+    def forget(self, item_id: int) -> bool:
+        """丢掉这一条的所有清单正文（解析失效、上游拒收时用）。"""
+        with self._lock:
+            keys = [key for key in self._rows if key[0] == item_id]
+            dropped = False
+            for key in keys:
+                dropped = self._rows.pop(key, None) is not None or dropped
+            return dropped
 
 
 def _pornhub_page_attempt(url: str, attempt: int) -> str:

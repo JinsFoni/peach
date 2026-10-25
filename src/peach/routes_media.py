@@ -1064,25 +1064,41 @@ def _follow_playlist_response(state, request: Request, item, target, *,
 
 
 def _playlist_response(state, request: Request, item, target, *, adaptive: bool) -> Response:
-    """取回清单并改写；`adaptive` 时把各档并成一份母清单。"""
-    upstream = open_upstream(state.http_transport.client, "GET", target,
-                             incoming=request.headers)
-    try:
-        body = bytearray()
-        for chunk in upstream.iter_bytes():
-            body.extend(chunk)
-            if len(body) > FOLLOW_PLAYLIST_LIMIT:
-                raise FollowProxyError("播放列表过大")
-        base = str(upstream.url)
-    finally:
-        upstream.close()
+    """取回清单并改写；`adaptive` 时把各档并成一份母清单。
+
+    母清单正文先问内存：一次起播要母清单加子清单两趟，重开同一条又是同两份，而点播
+    清单在签名有效期内一个字节都不变。改写留到每次现做——逐跳短键是重新生成的。
+    """
+    resolver = state.follow_media_resolver
+    cached = resolver.playlists.get((item.id, "master", target.url))
+    if cached is None:
+        upstream = open_upstream(state.http_transport.client, "GET", target,
+                                 incoming=request.headers)
+        try:
+            body = bytearray()
+            for chunk in upstream.iter_bytes():
+                body.extend(chunk)
+                if len(body) > FOLLOW_PLAYLIST_LIMIT:
+                    raise FollowProxyError("播放列表过大")
+            base = str(upstream.url)
+        finally:
+            upstream.close()
+        resolver.playlists.put((item.id, "master", target.url), base, bytes(body))
+    else:
+        base, raw = cached
+        body = bytearray(raw)
     if adaptive:
-        merged = state.follow_media_resolver.levels_master(item, target, bytes(body), base)
+        merged = resolver.levels_master(item, target, bytes(body), base)
         if merged is not None:
             body, base = bytearray(merged), target.url
     text = rewrite_follow_playlist(bytes(body), base, item_id=item.id, root=target.url,
                                    provider=item.provider,
-                                   resolver=state.follow_media_resolver)
+                                   resolver=resolver)
+    return _rewritten_playlist(request, text)
+
+
+def _rewritten_playlist(request: Request, text: bytes) -> Response:
+    """改写后的清单：正文随请求给，缓存交给播放器自己算（清单每次都是新的短键）。"""
     return Response(b"" if request.method == "HEAD" else text,
                     media_type="application/vnd.apple.mpegurl",
                     headers={"cache-control": "private, no-store",
@@ -1104,6 +1120,9 @@ def follow_hls(request: Request, id: int, r: str = "",
     键只在本机内存里对回上游地址，所以前端拿不到上游 URL。键是地址的摘要，同一把键
     永远是同一段字节：分片与密钥按不可变资源交给浏览器留着，回拖与重开同一条不必再
     经一次上游；清单与错误仍是一次性的。
+
+    子清单正文另在内存里留一份：一次起播只取一次母清单加一次子清单，改档、切清晰度、
+    重开同一条又各来一遍，而它的正文在签名有效期内不变。
     """
     state = request.app.state
     if not r:
@@ -1112,8 +1131,12 @@ def follow_hls(request: Request, id: int, r: str = "",
         item = FollowStore(lambda: connection).item(id)
     if item is None:
         return Response(status_code=404)
+    resolver = state.follow_media_resolver
+    kept = resolver.playlists.get((item.id, "playlist", r))
+    if kept is not None:
+        return _rewritten_playlist(request, kept[1])
     try:
-        url = state.follow_media_resolver.resource(item.id, r)
+        url = resolver.resource(item.id, r)
     except (FollowMediaUnavailable, ValueError):
         return Response(status_code=404, headers={"cache-control": "no-store"})
     target = ResolvedFollowMedia(url, item.url, playlist=True,
@@ -1153,12 +1176,9 @@ def follow_hls(request: Request, id: int, r: str = "",
     finally:
         upstream.close()
     text = rewrite_follow_playlist(bytes(payload), base, item_id=item.id, root=url,
-                                   provider=item.provider,
-                                   resolver=state.follow_media_resolver)
-    return Response(b"" if request.method == "HEAD" else text,
-                    media_type="application/vnd.apple.mpegurl",
-                    headers={"cache-control": "private, no-store",
-                             "referrer-policy": "no-referrer"})
+                                   provider=item.provider, resolver=resolver)
+    resolver.playlists.put((item.id, "playlist", r), base, text)
+    return _rewritten_playlist(request, text)
 
 
 class FollowImageRoute:
