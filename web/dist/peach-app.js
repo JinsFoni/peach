@@ -11714,7 +11714,7 @@ var Gr = (e) => (e?.results || []).filter((e) => !e.ok), Kr = (e) => (e?.results
 }, ti = "rand";
 function ni(e, t) {
 	let n = (e) => encodeURIComponent(e.join(","));
-	return `/api/follow?limit=100&offset=${t}` + (e.status ? `&status=${e.status}` : "") + (e.author ? `&author=${n([e.author])}` : "") + (e.provider ? `&provider=${n([e.provider])}` : "") + (e.tags.length ? `&tag=${n(e.tags)}` : "") + (e.work ? `&work=${n([e.work])}` : "") + (e.durMin ? `&dur_min=${e.durMin}` : "") + (e.durMax ? `&dur_max=${e.durMax}` : "") + (e.sort === "new" ? "" : `&sort=${e.sort}`) + (e.sort === "rand" ? `&seed=${e.seed}` : "") + (e.dir === "desc" ? "" : `&dir=${e.dir}`);
+	return `/api/follow?limit=40&offset=${t}` + (e.status ? `&status=${e.status}` : "") + (e.author ? `&author=${n([e.author])}` : "") + (e.provider ? `&provider=${n([e.provider])}` : "") + (e.tags.length ? `&tag=${n(e.tags)}` : "") + (e.work ? `&work=${n([e.work])}` : "") + (e.durMin ? `&dur_min=${e.durMin}` : "") + (e.durMax ? `&dur_max=${e.durMax}` : "") + (e.sort === "new" ? "" : `&sort=${e.sort}`) + (e.sort === "rand" ? `&seed=${e.seed}` : "") + (e.dir === "desc" ? "" : `&dir=${e.dir}`);
 }
 var ri = 18e5;
 function ii(e, t) {
@@ -11726,7 +11726,7 @@ function ii(e, t) {
 		],
 		queryFn: ({ pageParam: t, signal: n }) => H(ni(e, t), n),
 		initialPageParam: 0,
-		getNextPageParam: (e) => e.has_more ? (e.offset || 0) + 100 : void 0,
+		getNextPageParam: (e) => e.has_more ? (e.offset || 0) + 40 : void 0,
 		placeholderData: de,
 		gcTime: ri
 	};
@@ -77210,7 +77210,7 @@ async function JLe(e, t, n, r) {
 		}, t), r);
 		return o.push(n), n;
 	}, c = await s(i, 0);
-	return QK(o, e, t, n).length < n && c.has_more && await s(i, (c.offset || 0) + 100), i && QK(o, e, t, n).length < n && await s("", 0), {
+	return QK(o, e, t, n).length < n && c.has_more && await s(i, (c.offset || 0) + 40), i && QK(o, e, t, n).length < n && await s("", 0), {
 		pages: o,
 		pageParams: o.map((e) => e.offset || 0)
 	};
