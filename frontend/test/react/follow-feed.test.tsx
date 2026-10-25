@@ -70,12 +70,12 @@ it('卡面图随卡片一起取：封面格的底是黑的，不押到滚进视�
 
 describe('请求地址', () => {
   it('默认那一档不写进去，标签按逗号拼，种子只跟着随机排序走', () => {
-    expect(followPageUrl(VIEW, 0)).toBe('/api/follow?limit=100&offset=0');
+    expect(followPageUrl(VIEW, 0)).toBe('/api/follow?limit=40&offset=0');
     const url = new URL(followPageUrl(view({
       status: 'saved', author: 'name:kou', provider: 'kemono', tags: ['3d', 'loop'], work: 'zelda', sort: 'hot', dir: 'asc',
     }), 100), 'http://peach.test');
     expect(Object.fromEntries(url.searchParams)).toEqual({
-      limit: '100', offset: '100', status: 'saved', author: 'name:kou', provider: 'kemono', tag: '3d,loop', work: 'zelda',
+      limit: '40', offset: '100', status: 'saved', author: 'name:kou', provider: 'kemono', tag: '3d,loop', work: 'zelda',
       sort: 'hot', dir: 'asc',
     });
     expect(new URL(followPageUrl(view({ sort: 'rand', seed: 42 }), 0), 'http://peach.test').searchParams.get('seed')).toBe('42');
@@ -424,7 +424,7 @@ describe('页面', () => {
     await settle();
     const pages = fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/follow?'));
     expect(pages).toHaveLength(before + 1);
-    expect(new URL(String(pages.at(-1)![0]), 'http://peach.test').searchParams.get('offset')).toBe('100');
+    expect(new URL(String(pages.at(-1)![0]), 'http://peach.test').searchParams.get('offset')).toBe('40');
     expect(host.querySelector(`[data-follow-item="${FOLLOW_AUTO_LOAD_LIMIT + 1}"]`)).not.toBeNull();
   });
 

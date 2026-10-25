@@ -50,6 +50,6 @@ describe('关注接着看', () => {
     }));
     await fetchFollowRelated(current, 'videos', 20, new AbortController().signal);
     expect(urls.map(url => new URL(url, 'https://example.invalid').searchParams.get('author'))).toEqual(['name:kou', 'name:kou', null]);
-    expect(new URL(urls[1]!, 'https://example.invalid').searchParams.get('offset')).toBe('100');
+    expect(new URL(urls[1]!, 'https://example.invalid').searchParams.get('offset')).toBe('40');
   });
 });
