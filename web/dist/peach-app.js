@@ -59856,24 +59856,24 @@ var uH = ({ provider: e }) => /* @__PURE__ */ (0, C.jsx)("span", {
 	"data-follow-nothumb": "",
 	dangerouslySetInnerHTML: { __html: eI(e) }
 });
-function Gke({ src: e, fallback: t, width: n, height: r, provider: i, onLearn: a, retryKey: o }) {
-	let [s, c] = (0, S.useState)(!1), [l, u] = (0, S.useState)(!1), [d, f] = (0, S.useState)(null);
+function Gke({ src: e, fallback: t, width: n, height: r, provider: i, onLearn: a, retryKey: o, eager: s }) {
+	let [c, l] = (0, S.useState)(!1), [u, d] = (0, S.useState)(!1), [f, p] = (0, S.useState)(null);
 	return (0, S.useEffect)(() => {
-		c(!1);
-	}, [o]), s ? /* @__PURE__ */ (0, C.jsx)(uH, { provider: i }) : /* @__PURE__ */ (0, C.jsx)("img", {
-		src: l ? t : e,
+		l(!1);
+	}, [o]), c ? /* @__PURE__ */ (0, C.jsx)(uH, { provider: i }) : /* @__PURE__ */ (0, C.jsx)("img", {
+		src: u ? t : e,
 		alt: "",
-		loading: "eager",
+		loading: s ? "eager" : "lazy",
 		decoding: "async",
 		referrerPolicy: "no-referrer",
-		width: n || d?.width,
-		height: r || d?.height,
+		width: n || f?.width,
+		height: r || f?.height,
 		onError: () => {
-			t && t !== e && !l ? u(!0) : c(!0);
+			t && t !== e && !u ? d(!0) : l(!0);
 		},
 		onLoad: a ? (e) => {
 			let t = e.currentTarget;
-			t.naturalWidth && t.naturalHeight && (f({
+			t.naturalWidth && t.naturalHeight && (p({
 				width: t.naturalWidth,
 				height: t.naturalHeight
 			}), a(t.naturalWidth, t.naturalHeight));
@@ -59933,7 +59933,8 @@ function Kke(e) {
 							height: _?.height,
 							provider: A,
 							onLearn: v,
-							retryKey: e.retryKey
+							retryKey: e.retryKey,
+							eager: e.eager !== !1
 						}, p) : /* @__PURE__ */ (0, C.jsx)(uH, { provider: A }),
 						x.faces.length > 1 ? /* @__PURE__ */ (0, C.jsx)("div", {
 							"data-mix-faces": "",
@@ -59944,6 +59945,7 @@ function Kke(e) {
 									src: e,
 									alt: "",
 									loading: "eager",
+									fetchPriority: "low",
 									referrerPolicy: "no-referrer"
 								})
 							}, e))
@@ -60750,13 +60752,14 @@ function sAe({ facets: e, data: t, context: n, props: r, images: i, retryKey: a 
 		"data-layout": r.photoLayout,
 		"data-images-only": String(r.imagesOnly)
 	} : {}, u = qke(i && r.photoLayout === "masonry", `${r.photoSize}:${e.visible.map((e) => e.primary.id).join(",")}`), d;
-	return d = e.visible.length ? e.visible.map((t) => {
-		let i = e.byId.get(t.primary?.source_id), l = i?.author_key && e.authorSources.get(i.author_key) || [], u = t.primary.id;
+	return d = e.visible.length ? e.visible.map((t, i) => {
+		let l = e.byId.get(t.primary?.source_id), u = l?.author_key && e.authorSources.get(l.author_key) || [], d = t.primary.id;
 		return /* @__PURE__ */ (0, C.jsx)(dH, {
 			group: t,
-			authorSources: l,
+			authorSources: u,
 			media: o.media,
 			retryKey: a,
+			eager: i < 6,
 			context: n,
 			selected: r.selected.has(hH(t, o)),
 			selectMode: r.selectMode,
@@ -60765,7 +60768,7 @@ function sAe({ facets: e, data: t, context: n, props: r, images: i, retryKey: a 
 			actions: s,
 			onStatus: c.status,
 			onSave: c.save
-		}, `${u}:${o.media}`);
+		}, `${d}:${o.media}`);
 	}) : /* @__PURE__ */ (0, C.jsx)(cAe, {
 		data: t,
 		filtered: !!(o.status || e.author || e.provider || o.work || o.tags.length)
