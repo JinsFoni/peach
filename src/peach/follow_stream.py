@@ -9,6 +9,10 @@
 - 只有 HLS 的来源（Pornhub）：清单里没有可播的渐进式 mp4。播放器拿到一份 Peach 改写过的
   `m3u8`，每一跳再换成分片键回来取（`rewrite_follow_playlist`）。改写复用 STRM 那条路径
   的同一份实现（`preview_cache.rewrite_hls`），区别只在键表挂在本模块的解析器内存里。
+
+清单默认带着来源给的全部档位，播放器据此自适应升降档；播放器点名要某一档时（`height`）
+才换成那一档自己的清单。档位怎么来按来源分两种：xHamster 的母清单本身就写着各档，
+Pornhub 则是一档一份母清单，由 `levels_master` 并成一份。
 """
 from __future__ import annotations
 
@@ -21,12 +25,15 @@ import threading
 import time
 import urllib.parse
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Callable, Mapping
 
 import httpx
 
 from . import follow_providers
+from .fsutil import atomic_write_text
 from .follow_sources import USER_AGENT, archive_file_url, f95_attachment_media_items
 from .follow_secrets import Credential
 from .follow_store import FollowItemRow
@@ -198,9 +205,21 @@ class FollowMediaResolver:
     MAX_COOLDOWN = 1800.0
     REFUSED_STATUSES = frozenset({403, 429})
 
+    #: 已解析的清单地址落在哪个状态目录下。签名通常还剩一小时上下，重启或缓存被挤出
+    #: 之后不必再抓一次作品页；目录名与 `follow_state_root` 下其它状态并列。
+    PLAYBACK_DIR = "follow-playback"
+    #: 落盘的地址剩余有效期少于这么多秒就不写：刚写完就过期的没有意义。
+    PLAYBACK_MIN_SECONDS = 120.0
+    #: 从盘上读回来时至少还要剩这么多秒，否则宁可从作品页重解析一次。
+    PLAYBACK_REUSE_SECONDS = 30.0
+    #: 顺带清扫盘上那份的间隔与保留期：没人再打开的条目（例如已经删掉的）按时间清掉。
+    PLAYBACK_SWEEP = 3600.0
+    PLAYBACK_RETENTION = 7 * 24 * 3600.0
+
     def __init__(self, transport: HttpTransport, *, ttl: float = 300.0,
                  timeout: float = 20.0, max_bytes: int = 2_000_000,
                  max_cache_entries: int | None = None,
+                 state_root: Path | str | None = None,
                  clock: Callable[[], float] = time.monotonic):
         self.transport = transport
         self.ttl = ttl
@@ -209,12 +228,20 @@ class FollowMediaResolver:
         self.max_cache_entries = (self.MAX_CACHE_ENTRIES if max_cache_entries is None
                                   else max_cache_entries)
         self.clock = clock
+        #: 已解析地址的落盘目录；None 表示只在内存里活（测试与无状态入口）。
+        self.playback_root = (Path(state_root) / self.PLAYBACK_DIR
+                              if state_root is not None else None)
         self._cache: dict[int, tuple[float, ResolvedFollowMedia]] = {}
         self._misses: dict[int, float] = {}
         self._cooldowns: dict[str, float] = {}
         self._item_locks: dict[int, threading.Lock] = {}
         #: HLS 子资源键 → (过期时刻, 条目 id, 清单根地址, 上游地址)。
         self._resources: OrderedDict[str, tuple[float, int, str, str]] = OrderedDict()
+        #: 条目 id → (过期时刻, 并好的母清单)。同一档的母清单每次都要多取几次，
+        #: 而播放器可能连着要两三遍。
+        self._masters: dict[int, tuple[float, bytes]] = {}
+        #: 上一次清扫落盘目录的时刻（`_sweep_playback`）。
+        self._swept = 0.0
         self._lock = threading.Lock()
 
     def cooling(self, provider: str) -> float:
@@ -290,6 +317,7 @@ class FollowMediaResolver:
             while self._misses and len(self._misses) >= self.max_cache_entries:
                 self._misses.pop(next(iter(self._misses)))
             self._misses[item_id] = now + self.MISS_TTL
+        self._drop_playback(item_id)
 
     def _remember(self, item_id: int, resolved: ResolvedFollowMedia,
                   ttl: float | None = None) -> None:
@@ -302,6 +330,129 @@ class FollowMediaResolver:
         while self._cache and len(self._cache) >= self.max_cache_entries:
             self._cache.pop(next(iter(self._cache)))
         self._cache[item_id] = (now + (self.ttl if ttl is None else ttl), resolved)
+        self._save_playback(item_id, resolved)
+
+    def forget(self, item_id: int) -> bool:
+        """丢掉这一条的解析结果（内存、失败记录、盘上那份、并好的母清单）。
+
+        上游拒收一份清单时用它：地址可能已经过期，重解析一次比原样重试有用。
+        返回是否真的丢掉了什么，调用方据此决定要不要回源重试。
+        """
+        with self._lock:
+            dropped = self._cache.pop(item_id, None) is not None
+            dropped = self._misses.pop(item_id, None) is not None or dropped
+            dropped = self._masters.pop(item_id, None) is not None or dropped
+        return self._drop_playback(item_id) or dropped
+
+    # ---- 已解析地址的落盘 ------------------------------------------------
+    #
+    # 清单签名通常还剩一小时上下（`validto=`／`end=`），足够撑过进程重启和缓存淘汰。
+    # 只存带明确到期时间的地址：认不出还剩多久就宁可每次重解析，不拿一批可能已经
+    # 410 的地址去赌。文件按条目一条，权限收到属主可读。
+
+    _EXPIRY = re.compile(r"(?:validto|end)=(\d{9,})")
+
+    def _playback_path(self, item_id: int) -> Path | None:
+        return None if self.playback_root is None else self.playback_root / f"{item_id}.json"
+
+    @classmethod
+    def playback_expiry(cls, resolved: ResolvedFollowMedia) -> float:
+        """这份解析结果还剩多久可用；有任何一个地址认不出失效时间就当认不出。
+
+        每个地址各取自己最晚的一刻（同一份地址上可能叠着好几层签名），整份取其中
+        最早的那一个：要整份都还能取回才算可复用。
+        """
+        stamps = []
+        for url in [resolved.url, *(level for _, level in resolved.qualities)]:
+            found = {float(value) for value in cls._EXPIRY.findall(url)}
+            if not found:
+                return 0.0
+            stamps.append(max(found))
+        return min(stamps) if stamps else 0.0
+
+    def _save_playback(self, item_id: int, resolved: ResolvedFollowMedia) -> None:
+        path = self._playback_path(item_id)
+        if path is None or not resolved.playlist:
+            return
+        expiry = self.playback_expiry(resolved)
+        if expiry - time.time() < self.PLAYBACK_MIN_SECONDS:
+            return
+        payload = {
+            "expiry": expiry,
+            "url": resolved.url,
+            "referer": resolved.referer,
+            "headers": dict(resolved.headers) if resolved.headers else None,
+            "qualities": [[height, url] for height, url in resolved.qualities],
+            "allowed_hosts": list(resolved.allowed_hosts),
+            "playlist": resolved.playlist,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(path, json.dumps(payload), mode=0o600)
+        except OSError:
+            LOGGER.warning("follow playback for item %s could not be written", item_id,
+                           exc_info=True)
+            return
+        self._sweep_playback()
+
+    def _sweep_playback(self) -> None:
+        """顺带清掉没人再来问的那几条：条目被删掉之后，盘上那份再没人读。
+
+        只在写入之后跑，且一小时最多一次。攒下的文件很小，但一条一条删对应不上任何
+        事件，不如按时间清。这里的 `_swept` 不加锁：两个线程同时扫一遍也是无害的。
+        """
+        root = self.playback_root
+        now = time.time()
+        if root is None or now - self._swept < self.PLAYBACK_SWEEP:
+            return
+        self._swept = now
+        for path in root.glob("*.json"):
+            try:
+                if now - path.stat().st_mtime > self.PLAYBACK_RETENTION:
+                    path.unlink()
+            except OSError:
+                continue
+
+    def _load_playback(self, item_id: int) -> ResolvedFollowMedia | None:
+        path = self._playback_path(item_id)
+        if path is None:
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            expiry = float(payload["expiry"])
+            url = str(payload["url"])
+        except (OSError, ValueError, KeyError, TypeError):
+            self._drop_playback(item_id)
+            return None
+        if expiry - time.time() < self.PLAYBACK_REUSE_SECONDS or not url:
+            # 已经过期的那份留着也取不回，删掉省得每次打开都读一遍。
+            self._drop_playback(item_id)
+            return None
+        qualities = tuple((int(height), str(level))
+                          for height, level in payload.get("qualities") or ())
+        return ResolvedFollowMedia(
+            url, payload.get("referer"),
+            headers=payload.get("headers") or None,
+            qualities=qualities,
+            allowed_hosts=tuple(payload.get("allowed_hosts") or ()),
+            playlist=True)
+
+    def _drop_playback(self, item_id: int) -> bool:
+        path = self._playback_path(item_id)
+        if path is None:
+            return False
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
+
+    def _playback_ttl(self, resolved: ResolvedFollowMedia) -> float:
+        """盘上读回来的这份在内存里留多久：按签名还剩的时间，至少一个清单周期。"""
+        remaining = self.playback_expiry(resolved) - time.time()
+        return max(self.PLAYLIST_TTL, min(remaining, self.RESOURCE_TTL))
 
     # ---- HLS 子资源的短键 ------------------------------------------------
     #
@@ -414,6 +565,13 @@ class FollowMediaResolver:
             cached = self._cached(item.id)
         if cached:
             return _pick_quality(cached, height)
+        persisted = self._load_playback(item.id)
+        if persisted is not None:
+            # 进程重启或内存缓存被挤出之后先看盘上那份：签名还在有效期内，重复打开
+            # 同一条就不必再抓一次作品页。
+            with self._lock:
+                self._remember(item.id, persisted, ttl=self._playback_ttl(persisted))
+            return _pick_quality(persisted, height)
         if not item.url or not _page_allowed(item.provider, item.url):
             raise FollowMediaUnavailable("详情页地址不可用")
         with self._item_lock(item.id):
@@ -466,11 +624,12 @@ class FollowMediaResolver:
     #: 免得把一批已经 410 的地址反复交给播放器。
     PLAYLIST_TTL = 120.0
 
-    #: 作品页会把清单地址写成两种之一：带 `validfrom`／`validto` 的那种取回 200，只剩一个
-    #: `?h=` 哈希的那种取回 410。同一条作品连着取页面会换一种，实测取回可用清单的概率约
-    #: 四成，所以取回清单验证一遍，验不过就换一次页面重来；每次换页带一个没用过的参数，
-    #: 绕开边缘缓存里那一份。六次能把可用清单的概率提到九成五以上。
-    PORNHUB_ATTEMPTS = 6
+    #: 一轮里并行取几次作品页。能不能取回可用清单是「这一页」的运气：一页里的各档同生
+    #: 同死（要么都带 `validfrom`，要么都是取回 410 的 `?h=`）。串行重取最坏要等六次，
+    #: 三路并行、最多两轮，请求总数不变，等待压到一轮的耗时上。
+    PORNHUB_PARALLEL = 3
+    PORNHUB_ROUNDS = 2
+    PORNHUB_ATTEMPTS = PORNHUB_PARALLEL * PORNHUB_ROUNDS
 
     #: 验证清单只取开头这一截：`#EXTM3U` 加几行 `EXT-X-STREAM-INF` 就够判。
     PLAYLIST_PROBE_BYTES = 64 * 1024
@@ -481,7 +640,41 @@ class FollowMediaResolver:
         这个站不给可播的渐进式 mp4：`format=mp4` 那条指向 `/video/get_media`，
         匿名请求回空数组。所以这里只认 `format=hls`。
         """
-        for attempt in range(self.PORNHUB_ATTEMPTS):
+        for round_index in range(self.PORNHUB_ROUNDS):
+            for page in self._pornhub_pages(item, round_index):
+                levels = _pornhub_levels(item.provider, page)
+                if not levels:
+                    LOGGER.warning("pornhub watch page for follow item %s has no hls url", item.id)
+                    continue
+                ready = self._pornhub_ready_level(item, levels)
+                if ready is None:
+                    LOGGER.warning("pornhub playlist for follow item %s is not playable", item.id)
+                    continue
+                resolved = ResolvedFollowMedia(
+                    ready[1], item.url,
+                    # 只留不比可播那档更高的档（从高到低排好）：更高的那几档在这一页里
+                    # 已经验过取不回，留在表里只会让播放器升上去再掉下来。
+                    qualities=tuple((height, url)
+                                    for height, url in sorted(levels, key=lambda row: row[0],
+                                                              reverse=True)
+                                    if height <= ready[0]),
+                    allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
+                    playlist=True)
+                with self._lock:
+                    self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
+                return resolved
+        self._remember_miss(item.id)
+        raise FollowMediaUnavailable("Pornhub 正片地址未取得")
+
+    def _pornhub_pages(self, item: FollowItemRow, round_index: int) -> list[str]:
+        """一轮里并行取几次作品页，按提交顺序返回取到的正文。
+
+        每次换页带一个没用过的参数，绕开边缘缓存里那一份。
+        """
+        attempts = [round_index * self.PORNHUB_PARALLEL + offset
+                    for offset in range(self.PORNHUB_PARALLEL)]
+
+        def load(attempt: int) -> str | None:
             response = self.fetch(
                 item.provider,
                 HttpRequest("GET", _pornhub_page_attempt(item.url, attempt),
@@ -491,36 +684,34 @@ class FollowMediaResolver:
             if response.status != 200 or len(response.body) > self.max_bytes:
                 LOGGER.warning("pornhub watch page for follow item %s unavailable: HTTP %s",
                                item.id, response.status)
-                continue
-            found: list[tuple[int, str]] = []
-            for entry in pornhub_media_definitions(
-                    response.body.decode("utf-8", errors="replace")):
-                url = str(entry.get("videoUrl") or "")
-                if not url or not _allowed(item.provider, url):
-                    continue
-                try:
-                    height = int(entry.get("height") or 0)
-                except (TypeError, ValueError):
-                    height = 0
-                if all(existing != url for _, existing in found):
-                    found.append((height, url))
-            if not found:
-                LOGGER.warning("pornhub watch page for follow item %s has no hls url", item.id)
-                continue
-            ordered = sorted(found, key=lambda row: row[0], reverse=True)
-            if not self._pornhub_playlist_ready(item, ordered[0][1]):
-                LOGGER.warning("pornhub playlist for follow item %s is not playable", item.id)
-                continue
-            resolved = ResolvedFollowMedia(
-                ordered[0][1], item.url,
-                qualities=tuple(ordered),
-                allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
-                playlist=True)
-            with self._lock:
-                self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
-            return resolved
-        self._remember_miss(item.id)
-        raise FollowMediaUnavailable("Pornhub 正片地址未取得")
+                return None
+            return response.body.decode("utf-8", errors="replace")
+
+        if len(attempts) == 1:
+            pages = [load(attempts[0])]
+        else:
+            with ThreadPoolExecutor(max_workers=len(attempts),
+                                    thread_name_prefix="PeachPornhub") as pool:
+                pages = list(pool.map(load, attempts))
+        return [page for page in pages if page]
+
+    def _pornhub_ready_level(self, item: FollowItemRow,
+                             levels: list[tuple[int, str]]) -> tuple[int, str] | None:
+        """各档里最高的一档能播就返回它；最高那档验不过时把其余各档并行验一遍。"""
+        ordered = sorted(levels, key=lambda row: row[0], reverse=True)
+        if self._pornhub_playlist_ready(item, ordered[0][1]):
+            return ordered[0]
+        rest = ordered[1:]
+        if not rest:
+            return None
+        with ThreadPoolExecutor(max_workers=len(rest),
+                                thread_name_prefix="PeachPornhub") as pool:
+            ready = list(pool.map(
+                lambda row: self._pornhub_playlist_ready(item, row[1]), rest))
+        for row, ok in zip(rest, ready):
+            if ok:
+                return row
+        return None
 
     def _fetch_xhamster(self, item: FollowItemRow) -> ResolvedFollowMedia:
         """抓作品页，从页面上那条 HLS 母清单取各档，把能取回的那一档写进缓存。
@@ -586,7 +777,9 @@ class FollowMediaResolver:
                                candidate, item.id)
                 continue
             resolved = ResolvedFollowMedia(
-                found[0][1], item.url,
+                # 母清单本身就是可播地址：它带着各档，播放器据此自适应升降档。
+                # 点名要某一档时才换成那一档自己的子清单（`_pick_quality`）。
+                master_url, item.url,
                 qualities=found,
                 allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
                 playlist=True)
@@ -595,6 +788,67 @@ class FollowMediaResolver:
             return resolved
         self._remember_miss(item.id)
         raise FollowMediaUnavailable("xHamster 正片清单未取得")
+
+    # ---- 各档并成一份母清单 ----------------------------------------------
+    #
+    # 播放器要能自适应升降档，清单里就得有几条 `#EXT-X-STREAM-INF`。xHamster 的母清单
+    # 本身就写着各档；Pornhub 则是「一档一份母清单」，每份里只有一条。这里把后者并成
+    # 前者的形状：带宽、分辨率、编解码原样取自那一档自己的那行，子清单换成那一档的地址。
+
+    def levels_master(self, item: FollowItemRow, target: ResolvedFollowMedia,
+                      body: bytes, base: str) -> bytes | None:
+        """并好的多档母清单；这一档本来就是多档、或并不出两档就返回 None。"""
+        now = self.clock()
+        with self._lock:
+            cached = self._masters.get(item.id)
+        if cached and cached[0] > now:
+            return cached[1]
+        levels = tuple(target.qualities)
+        if len(levels) < 2 or not target.url or levels[0][1] != target.url:
+            return None
+        variants = list(playlist_variants(body.decode("utf-8", errors="replace"), base))
+        if not variants:
+            return None
+        variants.extend(row for text, url in self._level_masters(item, levels[1:])
+                        for row in playlist_variants(text, url))
+        if len(variants) < 2:
+            return None
+        merged = "\n".join(["#EXTM3U",
+                            *(f"{attributes}\n{url}" for attributes, url in variants)])
+        payload = (merged + "\n").encode("utf-8")
+        with self._lock:
+            self._masters[item.id] = (now + self.PLAYLIST_TTL, payload)
+        return payload
+
+    def _level_masters(self, item: FollowItemRow,
+                       levels: tuple[tuple[int, str], ...] | list[tuple[int, str]]) -> list[tuple[str, str]]:
+        """并行取回其余各档的母清单，返回 (正文, 取它的地址)；取不到的那一档跳过。"""
+        if not levels:
+            return []
+        headers = {"User-Agent": USER_AGENT, "Referer": str(item.url or "")}
+
+        def load(url: str) -> tuple[str, str] | None:
+            try:
+                response = self.fetch(item.provider, HttpRequest("GET", url, headers),
+                                      self.timeout, self.PLAYLIST_PROBE_BYTES)
+            except (OSError, httpx.HTTPError):
+                LOGGER.warning("follow level playlist for item %s failed", item.id,
+                               exc_info=True)
+                return None
+            if response.status != 200:
+                LOGGER.warning("follow level playlist for item %s returned HTTP %s",
+                               item.id, response.status)
+                return None
+            return response.body.decode("utf-8", errors="replace"), url
+
+        urls = [url for _, url in levels]
+        if len(urls) == 1:
+            rows = [load(urls[0])]
+        else:
+            with ThreadPoolExecutor(max_workers=len(urls),
+                                    thread_name_prefix="PeachLevels") as pool:
+                rows = list(pool.map(load, urls))
+        return [row for row in rows if row]
 
     def _pornhub_playlist_ready(self, item: FollowItemRow, url: str) -> bool:
         """取回一次清单，确认这一档真的能播。
@@ -652,6 +906,48 @@ def pornhub_media_definitions(text: str) -> tuple[dict, ...]:
                 return tuple(row for row in parsed
                              if isinstance(row, dict) and row.get("format") == "hls")
     return ()
+
+
+def playlist_variants(text: str, base: str = "") -> tuple[tuple[str, str], ...]:
+    """母清单里的 ( `#EXT-X-STREAM-INF` 那行, 子清单地址 )。
+
+    带宽、分辨率与编解码都写在那一行里，并各档时原样带走，不用自己估。`base` 给定时
+    把相对地址解析成可取的形式；子清单自己也是相对地址的那些来源（Pornhub）靠这一步。
+    """
+    found: list[tuple[str, str]] = []
+    attributes = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            if line.startswith("#EXT-X-STREAM-INF"):
+                attributes = line
+            continue
+        if attributes:
+            found.append((attributes, urllib.parse.urljoin(base, line) if base else line))
+            attributes = ""
+    return tuple(found)
+
+
+def _pornhub_levels(provider: str, text: str) -> list[tuple[int, str]]:
+    """作品页给出的 HLS 各档，按页面顺序去重；主机不在白名单上的整条丢掉。
+
+    `pornhub_media_definitions` 只留 `format=hls` 的那些：`format=mp4` 那条指向
+    `/video/get_media`，匿名请求回空数组。
+    """
+    found: list[tuple[int, str]] = []
+    for entry in pornhub_media_definitions(text):
+        url = str(entry.get("videoUrl") or "")
+        if not url or not _allowed(provider, url):
+            continue
+        try:
+            height = int(entry.get("height") or 0)
+        except (TypeError, ValueError):
+            height = 0
+        if all(existing != url for _, existing in found):
+            found.append((height, url))
+    return found
 
 
 def xhamster_hls_master(text: str) -> tuple[str, str] | None:

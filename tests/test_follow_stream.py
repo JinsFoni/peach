@@ -1,5 +1,10 @@
+import json
+import os
+import tempfile
 import threading
+import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -9,7 +14,7 @@ from peach import http as peach_http
 from peach.follow_stream import (
     MAX_PROXY_REDIRECTS, FollowMediaResolver, FollowMediaUnavailable,
     FollowProxyError, ResolvedFollowMedia, media_type, open_upstream,
-    pornhub_media_definitions, proxy_request_headers, proxyable,
+    playlist_variants, pornhub_media_definitions, proxy_request_headers, proxyable,
     resolvable_at_play, rewrite_follow_playlist,
 )
 from peach.follow_secrets import Credential
@@ -555,20 +560,36 @@ class PornhubPlaybackTests(unittest.TestCase):
 
         resolver = FollowMediaResolver(transport)
         resolver.resolve(_pornhub_item())
+        pages = len([url for url in transport.seen if "view_video" in url])
         chosen = resolver.resolve(_pornhub_item(), height=480)
         self.assertIn("/hls/480/", chosen.url)
-        pages = [url for url in transport.seen if "view_video" in url]
-        self.assertEqual(len(pages), 1)
+        self.assertEqual(len([url for url in transport.seen if "view_video" in url]), pages)
 
-    def test_a_dead_hash_playlist_comes_back_playable_after_another_page_load(self):
+    def test_a_dead_hash_playlist_comes_back_playable_from_the_same_round(self):
+        """第一页给的清单取回 410：同一轮里取的其它页本来就换了参数，仍能给出可播那档。"""
         transport = _pornhub_transport([PORNHUB_DEAD_PAGE, PORNHUB_WATCH_PAGE])
         resolved = FollowMediaResolver(transport).resolve(_pornhub_item())
         self.assertEqual(resolved.url,
                          "https://ev-h.phncdn.com/hls/1080/master.m3u8?validfrom=1&validto=2")
         pages = [url for url in transport.seen if "view_video" in url]
-        self.assertEqual(len(pages), 2)
-        # 第二次取页面带了一个新参数，拿到的是缓存之外那一份。
-        self.assertNotEqual(pages[0], pages[1])
+        self.assertEqual(len(pages), FollowMediaResolver.PORNHUB_PARALLEL)
+        # 同一轮的几次取页各带一个没用过的参数：边缘缓存里的那一份才会被绕开。
+        self.assertEqual(len(set(pages)), len(pages))
+
+    def test_a_dead_highest_level_falls_back_to_the_next_one_down(self):
+        """最高那档偶尔单独失效：它不能留在清单里，否则播放器升上去就断。"""
+        page = PORNHUB_WATCH_PAGE.replace(b"/hls/1080/master.m3u8?validfrom=1&validto=2",
+                                          b"/hls/1080/master.m3u8?h=hash")
+
+        def transport(request, timeout, max_bytes):
+            if ".m3u8" in request.url:
+                return HttpResponse(410 if "/hls/1080/" in request.url else 200, {},
+                                    b"" if "/hls/1080/" in request.url else PORNHUB_MASTER)
+            return HttpResponse(200, {}, page)
+
+        resolved = FollowMediaResolver(transport).resolve(_pornhub_item())
+        self.assertIn("/hls/720/", resolved.url)
+        self.assertEqual([height for height, _ in resolved.qualities], [720, 480])
 
     def test_a_page_that_only_offers_dead_playlists_reports_unavailable(self):
         transport = _pornhub_transport(PORNHUB_DEAD_PAGE)
@@ -625,3 +646,148 @@ class PornhubPlaybackTests(unittest.TestCase):
         self.assertFalse(resolvable_at_play("kemono", "https://kemono.cr/fanbox/user/1"))
         self.assertEqual(media_type("pornhub", None), "application/vnd.apple.mpegurl")
         self.assertEqual(media_type("kemono", "https://img.kemono.cr/a.webm"), "video/webm")
+
+
+#: 签名还长着的那一版作品页：落盘复用的用例要一个真在有效期内的地址。
+PORNHUB_LONG_LIVED = PORNHUB_WATCH_PAGE.replace(b"validfrom=1&validto=2",
+                                                b"validfrom=1700000000&validto=4102444800")
+
+
+class MergedMasterTests(unittest.TestCase):
+    """Pornhub 是一档一份母清单：并成一份多档母清单，播放器才有得选。"""
+
+    def _resolve(self, transport=None):
+        transport = transport or _pornhub_transport()
+        resolver = FollowMediaResolver(transport)
+        item = _pornhub_item()
+        return resolver, item, resolver.resolve(item)
+
+    def test_every_level_brings_its_own_line_and_its_own_child(self):
+        resolver, item, resolved = self._resolve()
+        merged = resolver.levels_master(item, resolved, PORNHUB_MASTER, resolved.url)
+        entries = playlist_variants(merged.decode("utf-8"))
+        self.assertEqual([url for _attributes, url in entries],
+                         ["https://ev-h.phncdn.com/hls/1080/index-v1-a1.m3u8",
+                          "https://ev-h.phncdn.com/hls/720/index-v1-a1.m3u8",
+                          "https://ev-h.phncdn.com/hls/480/index-v1-a1.m3u8"])
+        # 带宽、分辨率、编解码都是那一档自己的那行，原样带走。
+        self.assertTrue(all(attributes.startswith("#EXT-X-STREAM-INF:")
+                            and "CODECS=" in attributes for attributes, _ in entries))
+
+    def test_the_merged_master_is_kept_for_the_playlist_period(self):
+        transport = _pornhub_transport()
+        resolver, item, resolved = self._resolve(transport)
+        resolver.levels_master(item, resolved, PORNHUB_MASTER, resolved.url)
+        after_first = len(transport.seen)
+        resolver.levels_master(item, resolved, PORNHUB_MASTER, resolved.url)
+        self.assertEqual(len(transport.seen), after_first)
+
+    def test_a_source_with_a_single_level_keeps_the_playlist_it_gave(self):
+        """本来就一档：没有可并的，交给播放器的仍是来源那份清单。"""
+        page = (b'<html><body><script>VIDEO_SHOW = {"mediaDefinitions": ['
+                b'{"format": "hls", "height": 720, "videoUrl":'
+                b' "https://ev-h.phncdn.com/hls/720/master.m3u8?validfrom=1&validto=2"}]};'
+                b"</script></body></html>")
+        resolver, item, resolved = self._resolve(_pornhub_transport(page))
+        self.assertIsNone(
+            resolver.levels_master(item, resolved, PORNHUB_MASTER, resolved.url))
+
+    def test_a_level_that_is_not_a_master_leaves_nothing_to_merge(self):
+        def transport(request, timeout, max_bytes):
+            if ".m3u8" in request.url:
+                if "/hls/1080/" in request.url:
+                    return HttpResponse(410, {}, b"")
+                return HttpResponse(200, {}, b"#EXTM3U\n")
+            return HttpResponse(200, {}, PORNHUB_WATCH_PAGE)
+
+        resolver, item, resolved = self._resolve(transport)
+        # 最高的 1080 取不回，剩下的 720 能播但它给的不是母清单。
+        self.assertIn("/hls/720/", resolved.url)
+        self.assertIsNone(
+            resolver.levels_master(item, resolved, PORNHUB_MASTER, resolved.url))
+
+
+class PlaybackPersistenceTests(unittest.TestCase):
+    """已解析的清单地址写进状态目录：重启或缓存淘汰之后重复打开不必再回源。"""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def _entries(self):
+        return sorted((self.root / FollowMediaResolver.PLAYBACK_DIR).glob("*.json"))
+
+    def test_a_resolved_playlist_is_reused_by_the_next_process(self):
+        transport = _pornhub_transport(PORNHUB_LONG_LIVED)
+        item = _pornhub_item()
+        FollowMediaResolver(transport, state_root=self.root).resolve(item)
+        self.assertEqual(len(self._entries()), 1)
+        self.assertEqual(self._entries()[0].stat().st_mode & 0o777, 0o600)
+
+        fresh = _pornhub_transport(PORNHUB_LONG_LIVED)
+        again = FollowMediaResolver(fresh, state_root=self.root).resolve(item)
+        self.assertEqual(fresh.seen, [])
+        self.assertTrue(again.playlist)
+        self.assertEqual(again.url, "https://ev-h.phncdn.com/hls/1080/master.m3u8"
+                                    "?validfrom=1700000000&validto=4102444800")
+        self.assertEqual([height for height, _ in again.qualities], [1080, 720, 480])
+        self.assertEqual(again.allowed_hosts, ("phncdn.com",))
+        self.assertEqual(again.referer,
+                         "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5")
+
+    def test_an_expired_address_is_not_reused(self):
+        FollowMediaResolver(_pornhub_transport(PORNHUB_LONG_LIVED),
+                            state_root=self.root).resolve(_pornhub_item())
+        path = self._entries()[0]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["expiry"] = 1
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        transport = _pornhub_transport(PORNHUB_LONG_LIVED)
+        FollowMediaResolver(transport, state_root=self.root).resolve(_pornhub_item())
+        self.assertTrue([url for url in transport.seen if "view_video" in url])
+
+    def test_an_expired_address_is_dropped_from_disk(self):
+        """过期那份留着也取不回：重解析失败时它也不该继续躺在盘上。"""
+        FollowMediaResolver(_pornhub_transport(PORNHUB_LONG_LIVED),
+                            state_root=self.root).resolve(_pornhub_item())
+        path = self._entries()[0]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["expiry"] = 1
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        resolver = FollowMediaResolver(lambda *_args: HttpResponse(200, {}, b"<html></html>"),
+                                       state_root=self.root)
+        with self.assertRaises(FollowMediaUnavailable):
+            resolver.resolve(_pornhub_item())
+        self.assertEqual(self._entries(), [])
+
+    def test_entries_nobody_opens_are_swept_after_a_week(self):
+        FollowMediaResolver(_pornhub_transport(PORNHUB_LONG_LIVED),
+                            state_root=self.root).resolve(_pornhub_item())
+        stale = self._entries()[0]
+        old = time.time() - FollowMediaResolver.PLAYBACK_RETENTION - 60
+        os.utime(stale, (old, old))
+        # 再写一条，顺带触发清扫。
+        FollowMediaResolver(_pornhub_transport(PORNHUB_LONG_LIVED),
+                            state_root=self.root).resolve(_pornhub_item(8))
+        self.assertEqual([path.name for path in self._entries()], ["8.json"])
+
+    def test_an_address_that_expires_too_soon_is_not_written_down(self):
+        """`validto` 已经过去了的那种：写下来也没有一刻用得上。"""
+        FollowMediaResolver(_pornhub_transport(), state_root=self.root).resolve(_pornhub_item())
+        self.assertEqual(self._entries(), [])
+
+    def test_forgetting_drops_both_copies_and_says_whether_it_did(self):
+        transport = _pornhub_transport(PORNHUB_LONG_LIVED)
+        resolver = FollowMediaResolver(transport, state_root=self.root)
+        item = _pornhub_item()
+        resolver.resolve(item)
+        self.assertTrue(resolver.forget(item.id))
+        self.assertEqual(self._entries(), [])
+        self.assertFalse(resolver.forget(item.id))
+        # 丢掉之后这一条重新回源，而不是拿内存里那份接着播。
+        pages = len([url for url in transport.seen if "view_video" in url])
+        resolver.resolve(item)
+        self.assertGreater(len([url for url in transport.seen if "view_video" in url]), pages)
+

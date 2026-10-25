@@ -2356,6 +2356,108 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(segment.content, b"segment")
         self.assertEqual(segment.headers["content-type"], "video/mp2t")
 
+    def _save_hls_item(self) -> None:
+        """一条只有 HLS 的关注条目，让 `/follow-stream` 有据可查。"""
+        connection = sqlite3.connect(self.db)
+        connection.executescript((ROOT / "migrations" / "0018_online_follow.sql").read_text(
+            encoding="utf-8"))
+        connection.execute(
+            "INSERT INTO follow_source(id,provider,ref,label,url,semantics,created_at,updated_at)"
+            " VALUES(1,'pornhub','mini-diva','Mini Diva',"
+            "'https://www.pornhub.com/model/mini-diva/videos','work','x','x')"
+        )
+        connection.execute(
+            "INSERT INTO follow_item(id,source_id,external_id,title,url,release_key,"
+            "first_seen_at,last_seen_at,metadata_json) VALUES(9,1,'6aad2df8d45f5','Work',"
+            "'https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5','k','x','x',"
+            "'{\"media_kind\": \"video\"}')"
+        )
+        connection.commit()
+        connection.close()
+
+    async def test_every_level_of_the_source_reaches_the_player(self):
+        """没点名档位时清单里要有多条 `EXT-X-STREAM-INF`：播放器才有得升降档。"""
+        from peach.follow_stream import ResolvedFollowMedia
+
+        self._save_hls_item()
+        level_master = (b"#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1,"
+                        b"RESOLUTION=1920x1080\nindex-v1-a1.m3u8\n")
+
+        def upstream(request):
+            return httpx.Response(200, stream=httpx.ByteStream(level_master), request=request,
+                                  headers={"content-type": "application/vnd.apple.mpegurl"})
+
+        resolved = ResolvedFollowMedia(
+            "https://ev-h.phncdn.com/hls/1080/master.m3u8?validto=2",
+            "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+            qualities=((1080, "https://ev-h.phncdn.com/hls/1080/master.m3u8?validto=2"),
+                       (720, "https://ev-h.phncdn.com/hls/720/master.m3u8?validto=2"),
+                       (480, "https://ev-h.phncdn.com/hls/480/master.m3u8?validto=2")),
+            allowed_hosts=("phncdn.com",), playlist=True)
+        original = self.app.state.http_transport.client
+        fake = httpx.Client(transport=httpx.MockTransport(upstream), follow_redirects=True)
+        self.app.state.http_transport.client = fake
+        try:
+            with patch.object(self.app.state.follow_media_resolver, "resolve",
+                              return_value=resolved):
+                played = await self.client.get("/follow-stream?id=9&t=secret")
+                fixed = await self.client.get("/follow-stream?id=9&t=secret&quality=720")
+        finally:
+            self.app.state.http_transport.client = original
+            fake.close()
+        self.assertEqual(played.status_code, 200)
+        lines = played.text.splitlines()
+        self.assertEqual(len([line for line in lines if line.startswith("#EXT-X-STREAM-INF")]), 3)
+        self.assertEqual(len([line for line in lines if line.startswith("/follow-hls?id=9&r=")]), 3)
+        self.assertNotIn("phncdn", played.text)
+        # 点名要一档时仍按那一档自己的清单来，播放器不做自适应。
+        self.assertEqual(len([line for line in fixed.text.splitlines()
+                              if line.startswith("#EXT-X-STREAM-INF")]), 1)
+
+    async def test_a_refused_playlist_is_resolved_once_more_before_giving_up(self):
+        """签名到期时上游回 410：丢一次解析结果重来，别让用户再按一次播放。"""
+        from peach.follow_stream import ResolvedFollowMedia
+
+        self._save_hls_item()
+        stale = ResolvedFollowMedia(
+            "https://ev-h.phncdn.com/hls/1080/master.m3u8?validto=1",
+            "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+            allowed_hosts=("phncdn.com",), playlist=True)
+        fresh = ResolvedFollowMedia(
+            "https://ev-h.phncdn.com/hls/1080/master.m3u8?validto=2",
+            "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+            allowed_hosts=("phncdn.com",), playlist=True)
+        media = b"#EXTM3U\n#EXTINF:8.0,\nseg-1.ts\n"
+
+        def upstream(request):
+            if "validto=1" in str(request.url):
+                return httpx.Response(410, request=request)
+            return httpx.Response(200, stream=httpx.ByteStream(media), request=request,
+                                  headers={"content-type": "application/vnd.apple.mpegurl"})
+
+        original = self.app.state.http_transport.client
+        fake = httpx.Client(transport=httpx.MockTransport(upstream), follow_redirects=True)
+        self.app.state.http_transport.client = fake
+        try:
+            with patch.object(self.app.state.follow_media_resolver, "resolve",
+                              side_effect=[stale, fresh]) as resolve, \
+                    patch.object(self.app.state.follow_media_resolver, "forget",
+                                 return_value=True):
+                played = await self.client.get("/follow-stream?id=9&t=secret")
+            self.assertEqual(resolve.call_count, 2)
+            self.assertEqual(played.status_code, 200)
+            self.assertIn("/follow-hls?id=9&r=", played.text)
+            with patch.object(self.app.state.follow_media_resolver, "resolve",
+                              return_value=stale), \
+                    patch.object(self.app.state.follow_media_resolver, "forget",
+                                 return_value=False):
+                refused = await self.client.get("/follow-stream?id=9&t=secret")
+        finally:
+            self.app.state.http_transport.client = original
+            fake.close()
+        # 什么都没丢掉说明这一条本来就取不到：重来一次只是白等，直接报错。
+        self.assertEqual(refused.status_code, 502)
+
     async def test_follow_image_and_preview_segments_replay_from_disk(self):
         from peach.preview_cache import PreviewCache
         from peach.remote_media_cache import cache_for

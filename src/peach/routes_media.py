@@ -997,7 +997,10 @@ def follow_stream(request: Request, id: int, media: int | None = None,
             # 清单按次取回，不进响应缓存。下载走不了这条路——清单本身不是片子。
             if download:
                 return JSONResponse({"error": "这一条只有 HLS 清单，不能直接下载"}, status_code=400)
-            return _follow_playlist_response(state, request, item, target)
+            # 没点名档位时把来源给的各档都写进清单，播放器据此自适应升降档。
+            return _follow_playlist_response(state, request, item, target,
+                                             adaptive=quality is None,
+                                             media=media, quality=quality)
         # 跟重定向、逐跳过白名单、非 2xx 一律不转发，都在 follow_stream 里；
         # 这里只负责把 Peach 的请求接到那个流上。
         extra = {"content-disposition": _attachment_disposition(item.title, target.url)} if download else None
@@ -1019,12 +1022,35 @@ def follow_stream(request: Request, id: int, media: int | None = None,
 FOLLOW_PLAYLIST_LIMIT = 2 * 1024 * 1024
 
 
-def _follow_playlist_response(state, request: Request, item, target) -> Response:
+def _follow_playlist_response(state, request: Request, item, target, *,
+                              adaptive: bool = True,
+                              media: int | None = None,
+                              quality: int | None = None) -> Response:
     """取回清单、把每一跳换成 `/follow-hls` 的短键，再把清单交给播放器。
 
     上游地址（含签名查询串）只活在这个进程里：浏览器看到的每一跳都是
     `/follow-hls?id=&r=`，`r` 是那一条的键。
+
+    `adaptive` 表示播放器没点名档位：来源逐档给的是「一档一份母清单」时
+    （Pornhub），单取这一档就只剩一条线路，升降档无从谈起，由 `levels_master`
+    并成一份带全部档位的母清单再改写。
     """
+    try:
+        return _playlist_response(state, request, item, target,
+                                  adaptive=adaptive and request.method != "HEAD")
+    except FollowProxyError:
+        # 上一轮的解析结果可能已经过期（签名到期就是 410）：丢掉它重解析一次，
+        # 玩家不必自己再按一次播放。丢掉什么都没丢说明这一条本来就取不到，直接报错。
+        if not state.follow_media_resolver.forget(item.id):
+            raise
+        LOGGER.info("follow playlist for item %s re-resolved after a refusal", item.id)
+        refreshed = state.follow_media_resolver.resolve(item, media, quality)
+        return _playlist_response(state, request, item, refreshed,
+                                  adaptive=adaptive and request.method != "HEAD")
+
+
+def _playlist_response(state, request: Request, item, target, *, adaptive: bool) -> Response:
+    """取回清单并改写；`adaptive` 时把各档并成一份母清单。"""
     upstream = open_upstream(state.http_transport.client, "GET", target,
                              incoming=request.headers)
     try:
@@ -1036,6 +1062,10 @@ def _follow_playlist_response(state, request: Request, item, target) -> Response
         base = str(upstream.url)
     finally:
         upstream.close()
+    if adaptive:
+        merged = state.follow_media_resolver.levels_master(item, target, bytes(body), base)
+        if merged is not None:
+            body, base = bytearray(merged), target.url
     text = rewrite_follow_playlist(bytes(body), base, item_id=item.id, root=target.url,
                                    provider=item.provider,
                                    resolver=state.follow_media_resolver)
