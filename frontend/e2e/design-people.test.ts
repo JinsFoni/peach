@@ -15,6 +15,12 @@ const GLOW_PINE = {
   spot1: { color: '#3f9e57', alpha: 66 }, spot2: { color: '#7fae4a', alpha: 48 }, spot3: { color: '#4f9463', alpha: 56 },
 };
 
+/** 「玻璃原色」那一档，三枚光晕整层归零；三枚存成纯红，好在卡面上认出主题那两团没跟着变红。 */
+const GLOW_NATIVE = {
+  on: true, preset: 'native', strength: 100, noise: 0, speed: 100, soften: 50, size: 50,
+  spot1: { color: '#ff0000', alpha: 66 }, spot2: { color: '#ff0000', alpha: 48 }, spot3: { color: '#ff0000', alpha: 56 },
+};
+
 describe('设计决定：人物与厂牌资料页', () => {
   let browser: Browser;
   installDesignBrowser((next) => { browser = next; });
@@ -350,6 +356,7 @@ describe('设计决定：人物与厂牌资料页', () => {
           spans: (getComputedStyle(layer, '::before').backgroundImage.match(/radial-gradient/g) ?? []).length,
           cardOverflow: cardStyle.overflow,
           cardIsolation: cardStyle.isolation,
+          cardBackground: cardStyle.backgroundImage,
           spill: Math.max(cardBox.left - box.left, cardBox.top - box.top, box.right - cardBox.right, box.bottom - cardBox.bottom),
         };
       });
@@ -361,7 +368,43 @@ describe('设计决定：人物与厂牌资料页', () => {
         '卡上那三枚光晕没有取到设置里那三枚颜色');
       assert.deepEqual([shown.cardOverflow, shown.cardIsolation], ['hidden', 'isolate'],
         '卡没有裁住光晕层，或没有自成一个层叠上下文');
+      assert.equal(shown.cardBackground, 'none', '配了色的档位里卡面又铺了一层自带反光');
       assert.ok(shown.spill <= .5, `光晕层越出卡的边界 ${shown.spill}px`);
+      assert.deepEqual(opened.problems, []);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('玻璃原色档：卡面照抽屉那套漂主题自带的两团反光，三枚光晕整层归零', { timeout: 60_000 }, async () => {
+    const opened = await openProfiledPerformer(browser, DESKTOP, 'light', {}, (page) => page.addInitScript((glow) => {
+      localStorage.setItem('peach.settings.v1', JSON.stringify({ detailAutoplay: false, homeGlow: glow }));
+    }, GLOW_NATIVE));
+    try {
+      const page = opened.page;
+      const shown = await page.locator('[data-entity-card]').evaluate((card) => {
+        const [cardStyle, layerStyle] = [getComputedStyle(card), getComputedStyle(card.querySelector('[data-glow-layer]')!)];
+        return {
+          native: document.documentElement.hasAttribute('data-glow-native'),
+          strength: layerStyle.getPropertyValue('--glow-strength').trim(),
+          image: cardStyle.backgroundImage,
+          size: cardStyle.backgroundSize,
+          repeat: cardStyle.backgroundRepeat,
+          position: cardStyle.backgroundPosition,
+          fill: cardStyle.backgroundColor,
+        };
+      });
+      assert.equal(shown.native, true, '根上没挂原色档，卡面不知道要退回自带那两团');
+      assert.equal(shown.strength, '0', '原色档下三枚光晕没有整层归零');
+      assert.equal((shown.image.match(/radial-gradient/g) ?? []).length, 2, '卡面没有铺上自带那两团反光');
+      assert.equal((shown.image.match(/linear-gradient/g) ?? []).length, 1, '卡面缺了那层斜向的高光');
+      /* 两团取主题自己的色相（`--glass-native-a/b`），不是设置里存着的那三枚：原色档说的就是
+         退回主题那一档，把用户存的颜色带上就成了第五种档位。 */
+      assert.equal(/rgba?\(255, 0, 0/.test(shown.image), false, '两团反光取的是设置里存着的颜色');
+      assert.equal(shown.size, '200% 200%, 200% 200%, auto', '两团反光不是铺在两倍大的画布上');
+      assert.equal(shown.repeat, 'no-repeat, no-repeat, repeat', '两团反光的重复方式与抽屉不一致');
+      assert.ok(shown.position.startsWith('50% 20%, 80% 70%'), `两团反光的起点与抽屉不一致：${shown.position}`);
+      assert.notEqual(shown.fill, 'rgba(0, 0, 0, 0)', '卡面自己那层底色被换掉了');
       assert.deepEqual(opened.problems, []);
     } finally {
       await opened.close();
