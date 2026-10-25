@@ -838,13 +838,27 @@ def _thumb_url(item) -> str | None:
     return _cached_thumb_url(item, thumb)
 
 
+def image_cache_key(url: str) -> str:
+    """同一张上游缩略图在本机只存一份：键只认地址，谁拿到的都一样。"""
+    return f"image:{url}"
+
+
+def thumb_version(url: str) -> str:
+    """地址上那个 `v`：直接是这张图在 remote-media 里的槽目录名。
+
+    一屏四十张封面就是四十趟 `/follow-image`，只为算出目录名再开一次库不值当，所以让
+    地址自己带着它（取图那一头见 `routes_media.FollowImageRoute`）。
+    """
+    return hashlib.sha256(image_cache_key(url).encode()).hexdigest()
+
+
 def _cached_thumb_url(item, thumb, media=None):
     if not thumb or not thumb.startswith("https://"):
         return thumb
     if media is None:
         media = next((index for index, row in enumerate(_raw_media_items(item))
                       if (row.get("thumb_url") or row.get("url")) == thumb), None)
-    version = hashlib.sha256(thumb.encode()).hexdigest()[:16]
+    version = thumb_version(thumb)
     return f"/follow-image?id={item.id}{f'&media={media}' if media is not None else ''}&v={version}"
 
 

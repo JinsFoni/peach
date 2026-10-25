@@ -17,6 +17,14 @@ AVATAR_REFRESH_SECONDS = 90 * 86400
 FAVICON_REFRESH_SECONDS = 365 * 86400
 MEDIA_HEADERS = ("content-type", "content-length", "content-range", "accept-ranges", "content-encoding")
 
+#: 槽目录名就是来源键的 sha256 全写。地址里带摘要的那条快路径只认这个形状。
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _slot_in(folder: Path, byte_range: str = "") -> Path:
+    name = hashlib.sha256(byte_range.encode()).hexdigest() if byte_range else "full"
+    return folder / name
+
 
 class RemoteMediaUnavailable(ValueError):
     pass
@@ -35,12 +43,21 @@ class RemoteMediaCache:
     def folder(self, key: str) -> Path:
         return self.root / hashlib.sha256(key.encode()).hexdigest()
 
+    def folder_for(self, digest: str) -> Path | None:
+        """槽摘要是地址自己带的（`web_follow.thumb_version`）：按它取目录，不必先有来源键。
+
+        形状不对的一律回 None，让调用方回到「先解析来源、再算键」那条路上去。
+        """
+        return self.root / digest if _DIGEST.fullmatch(digest) else None
+
     def _slot(self, key: str, byte_range: str = "") -> Path:
-        name = hashlib.sha256(byte_range.encode()).hexdigest() if byte_range else "full"
-        return self.folder(key) / name
+        return _slot_in(self.folder(key), byte_range)
 
     def stored(self, key: str, byte_range: str = ""):
-        for slot in dict.fromkeys((self._slot(key), self._slot(key, byte_range))):
+        return self.stored_in(self.folder(key), byte_range)
+
+    def stored_in(self, folder: Path, byte_range: str = ""):
+        for slot in dict.fromkeys((_slot_in(folder), _slot_in(folder, byte_range))):
             try:
                 metadata = json.loads(slot.with_suffix(".json").read_text(encoding="utf-8"))
                 path = slot.with_suffix(".bin")
@@ -51,7 +68,13 @@ class RemoteMediaCache:
         return None
 
     def response(self, key: str, request, *, headers=None):
-        found = self.stored(key, request.headers.get("range", ""))
+        return self._respond(self.stored(key, request.headers.get("range", "")), request, headers)
+
+    def response_in(self, folder: Path, request, *, headers=None):
+        """已知槽目录的直接命中：同一份响应，只是跳过了「键 → 目录」这一步。"""
+        return self._respond(self.stored_in(folder, request.headers.get("range", "")), request, headers)
+
+    def _respond(self, found, request, headers):
         if not found:
             return None
         path, metadata = found

@@ -2523,6 +2523,36 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
             self.app.state.http_transport.client = original
             fake.close()
 
+    async def test_follow_image_serves_a_cached_cover_from_the_address_alone(self):
+        """地址里的 `v` 就是槽目录名：命中时既不开库，也不再解析来源。"""
+        from peach import web_follow
+        from peach.remote_media_cache import cache_for
+        cover = b'cached-cover'
+        item = SimpleNamespace(id=31, provider='simpcity', url='https://simpcity.cr/post/31',
+            thumb_url='https://cdn.example/cover.png', media_url='https://cdn.example/cover.png',
+            metadata={}, hidden_media=())
+        def upstream(request):
+            return httpx.Response(200, headers={'content-type': 'image/png',
+                'content-length': str(len(cover))}, stream=httpx.ByteStream(cover), request=request)
+        original = self.app.state.http_transport.client
+        fake = httpx.Client(transport=httpx.MockTransport(upstream))
+        self.app.state.http_transport.client = fake
+        try:
+            with patch('peach.routes_media.FollowStore.item', return_value=item), \
+                    patch('peach.follow_stream.resolves_publicly', return_value=True):
+                first = await self.client.get('/follow-image?id=31&t=secret')
+            version = web_follow.thumb_version(item.thumb_url)
+            self.assertTrue(cache_for(self.app.state.web_contract).folder_for(version).is_dir())
+            with patch('peach.routes_media.FollowStore',
+                       side_effect=AssertionError('摘要命中时不该开库')):
+                replay = await self.client.get(f'/follow-image?id=31&v={version}&t=secret')
+            self.assertEqual((first.status_code, replay.status_code), (200, 200))
+            self.assertEqual(replay.content, cover)
+            self.assertEqual(replay.headers['cache-control'], 'private, max-age=31536000')
+        finally:
+            self.app.state.http_transport.client = original
+            fake.close()
+
     async def test_follow_cover_serves_cached_frame_and_reports_retryable_failure(self):
         connection = sqlite3.connect(self.db)
         connection.executescript((ROOT / "migrations" / "0018_online_follow.sql").read_text(

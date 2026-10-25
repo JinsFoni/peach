@@ -428,7 +428,7 @@ class MotionRecipeTests(unittest.TestCase):
     """
 
     #: 这一组新增的动效类，每一条都必须只从 token 取时长。
-    MOTION_TOKENS = ("--motion-swap", "--motion-reveal", "--motion-stagger")
+    MOTION_TOKENS = ("--motion-swap", "--motion-reveal", "--motion-cover", "--motion-stagger")
 
     def test_reduced_motion_zeroes_every_motion_token(self):
         """新加的三档时长跟原有的一样，由那一条全局规则一次关掉，不逐处补。

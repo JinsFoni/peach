@@ -86,6 +86,16 @@ def _authorized(request: Request, token: str, args: dict[str, str]) -> bool:
     return access.valid_session(policy, request.cookies.get(access.COOKIE, ""))
 
 
+def session_allows(request: Request, args: dict[str, str] | None = None) -> bool:
+    """这次请求能不能读受保护的内容。
+
+    依赖注入那几条走的是同一个判据；自己接的 ASGI 路由（`/follow-image`）也调它，
+    免得两条入口对同一件事各写一遍，改一处忘一处就漏了口子。
+    """
+    return _authorized(request, request.app.state.settings.token,
+                       _first_query_values(request) if args is None else args)
+
+
 class PageLoginRequired(Exception):
     """页面路由未授权：401 形态是跳登录页，不是响应体。"""
 
@@ -162,7 +172,7 @@ def require_auth(request: Request) -> dict[str, str]:
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         same_origin(request)
     args = _first_query_values(request)
-    if not _authorized(request, request.app.state.settings.token, args):
+    if not session_allows(request, args):
         raise HTTPException(status_code=401, detail="unauthorized")
     return args
 
