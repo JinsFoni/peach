@@ -21,7 +21,7 @@ from peach.follow_sources import (
     FollowSourceError, build_connector, parse_source_url, xhamster_listing,
 )
 from peach.follow_stream import (
-    FollowMediaResolver, FollowMediaUnavailable, ResolvedFollowMedia, media_type,
+    FollowMediaResolver, FollowMediaUnavailable, PlaylistMemory, ResolvedFollowMedia, media_type,
     resolvable_at_play, xhamster_hls_codecs, xhamster_hls_master, xhamster_hls_variants,
 )
 from peach.http import HttpResponse
@@ -469,6 +469,48 @@ class PlaybackPersistenceTests(unittest.TestCase):
             self.assertTrue(resolver.forget(5))
             self.assertEqual(self._entries(root), [])
             self.assertFalse(resolver.forget(5))
+
+
+class PlaylistMemoryTests(unittest.TestCase):
+    """清单正文在内存里按条目留一份：一次起播要母清单加子清单，重开又是同两份。
+
+    留的是改写前的正文，改写每次现做——逐跳短键是重新生成的，留下改写后的文本会把
+    过期的键发出去。
+    """
+
+    def _memory(self, **options) -> tuple[PlaylistMemory, list[float]]:
+        now = [1000.0]
+        return PlaylistMemory(clock=lambda: now[0], **options), now
+
+    def test_a_body_is_kept_until_its_moment_passes(self):
+        memory, now = self._memory(ttl=120.0)
+        key = (5, "master", "https://video-nss.xhcdn.com/a/_TPL_.h264.mp4.m3u8")
+        self.assertIsNone(memory.get(key))
+        memory.put(key, "https://video-nss.xhcdn.com/a/_TPL_.h264.mp4.m3u8", b"#EXTM3U\n")
+        now[0] += 119.0
+        self.assertEqual(memory.get(key), ("https://video-nss.xhcdn.com/a/_TPL_.h264.mp4.m3u8",
+                                           b"#EXTM3U\n"))
+        now[0] += 2.0
+        self.assertIsNone(memory.get(key))
+
+    def test_the_oldest_body_goes_first_when_the_cap_is_reached(self):
+        memory, _ = self._memory(capacity=2)
+        for index in range(3):
+            memory.put((index, "master", f"https://example.test/{index}.m3u8"),
+                       "https://example.test/", b"#EXTM3U\n")
+        self.assertIsNone(memory.get((0, "master", "https://example.test/0.m3u8")))
+        self.assertIsNotNone(memory.get((1, "master", "https://example.test/1.m3u8")))
+
+    def test_forget_drops_every_body_of_one_item_only(self):
+        memory, _ = self._memory()
+        memory.put((5, "master", "https://example.test/a.m3u8"), "https://example.test/", b"a")
+        memory.put((5, "playlist", "abc"), "https://example.test/b.m3u8", b"b")
+        memory.put((6, "master", "https://example.test/c.m3u8"), "https://example.test/", b"c")
+        self.assertTrue(memory.forget(5))
+        self.assertIsNone(memory.get((5, "master", "https://example.test/a.m3u8")))
+        self.assertIsNone(memory.get((5, "playlist", "abc")))
+        self.assertIsNotNone(memory.get((6, "master", "https://example.test/c.m3u8")))
+        self.assertFalse(memory.forget(5))
 
 
 if __name__ == "__main__":

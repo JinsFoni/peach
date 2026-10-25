@@ -2418,6 +2418,56 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
             await self.client.get("/follow-qualities?id=9&codec=vp9&t=secret")
         self.assertEqual(asked, ["av1", None])
 
+    async def test_a_playlist_is_fetched_once_while_the_signature_lives(self):
+        """母清单与子清单的正文各留一份：重开同一条、切一次清晰度不再回源。
+
+        一次起播要母清单加子清单两趟，重开又是同两份，而点播清单在签名有效期内一个
+        字节都不变。每趟都回源的话，起播前那几百毫秒与用户无关，全是白等的往返。
+        """
+        from peach.follow_stream import ResolvedFollowMedia
+
+        self._save_hls_item()
+        master = (b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720\n"
+                  b"720/index.m3u8\n")
+        child = b"#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\npiece.ts\n"
+        asked = []
+
+        def upstream(request):
+            asked.append(request.url.path)
+            if request.url.path.endswith("master.m3u8"):
+                return httpx.Response(200, stream=httpx.ByteStream(master), request=request,
+                                      headers={"content-type": "application/vnd.apple.mpegurl"})
+            if request.url.path.endswith("index.m3u8"):
+                return httpx.Response(200, stream=httpx.ByteStream(child), request=request,
+                                      headers={"content-type": "application/vnd.apple.mpegurl"})
+            return httpx.Response(200, stream=httpx.ByteStream(b"piece"), request=request,
+                                  headers={"content-type": "video/mp2t", "content-length": "5"})
+
+        resolved = ResolvedFollowMedia(
+            "https://ev-h.phncdn.com/hls/720/master.m3u8?validto=2",
+            "https://www.pornhub.com/view_video.php?viewkey=6aad2df8d45f5",
+            allowed_hosts=("phncdn.com",), playlist=True)
+        original = self.app.state.http_transport.client
+        fake = httpx.Client(transport=httpx.MockTransport(upstream), follow_redirects=True)
+        self.app.state.http_transport.client = fake
+        try:
+            with patch.object(self.app.state.follow_media_resolver, "resolve", return_value=resolved):
+                first = await self.client.get("/follow-stream?id=9&t=secret")
+                again = await self.client.get("/follow-stream?id=9&t=secret")
+            level = [line for line in first.text.splitlines()
+                     if line and not line.startswith("#")][0]
+            once = await self.client.get(f"{level}&t=secret")
+            twice = await self.client.get(f"{level}&t=secret")
+        finally:
+            self.app.state.http_transport.client = original
+            fake.close()
+        self.assertEqual([path.rsplit("/", 1)[-1] for path in asked],
+                         ["master.m3u8", "index.m3u8"])
+        self.assertEqual(first.text, again.text)
+        self.assertEqual(once.text, twice.text)
+        self.assertIn("/follow-hls?id=9&r=", twice.text)
+        self.assertNotIn("piece.ts", twice.text)
+
     def _save_hls_item(self) -> None:
         """一条只有 HLS 的关注条目，让 `/follow-stream` 有据可查。"""
         connection = sqlite3.connect(self.db)
