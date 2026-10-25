@@ -240,8 +240,9 @@ def create_app(
     mount_reachability = MountReachability(source_roots())
     resolver = FFmpegResolver(settings.ffmpeg_root)
     http_transport = HttpxTransport()
-    follow_media_resolver = FollowMediaResolver(http_transport).with_credential_loader(
-        lambda provider: web_follow._credential_store(contract).load(provider))
+    follow_media_resolver = FollowMediaResolver(
+        http_transport, state_root=settings.follow_state_root).with_credential_loader(
+            lambda provider: web_follow._credential_store(contract).load(provider))
     # 检查更新、浏览与画面签名的取图共用这一份按站冷却：同一个站被限流，几处都得停。
     contract.follow_media_resolver = follow_media_resolver
     follow_cover_service = FollowCoverService(

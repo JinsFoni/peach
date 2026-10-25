@@ -292,14 +292,17 @@ class MediaTests(unittest.TestCase):
             return HttpResponse(200, {}, body.encode("utf-8"))
         return FollowMediaResolver(transport)
 
-    def test_playing_resolves_the_playlist_at_the_highest_quality(self):
+    def test_playing_hands_over_the_master_with_every_quality(self):
+        """母清单就是交给播放器的地址：四档都在里面，播放器据此自适应升降档。"""
         resolver = self._resolver(masters={"_TPL_.h264.mp4.m3u8": (200, _master())})
         resolved = resolver.resolve(self._item())
         self.assertTrue(resolved.playlist)
         self.assertEqual([height for height, _url in resolved.qualities], [2160, 1080, 480, 144])
-        self.assertEqual(resolved.url, f"{FRONT}/2160p.h264.mp4.m3u8")
+        self.assertEqual(resolved.url, f"{FRONT}/_TPL_.h264.mp4.m3u8")
+        self.assertEqual(resolved.qualities[0][1], f"{FRONT}/2160p.h264.mp4.m3u8")
         self.assertEqual(resolved.allowed_hosts, ("xhcdn.com", "ahcdn.com"))
         self.assertEqual(resolved.referer, WATCH_URL)
+        # 点名要某一档时才换成那一档自己的子清单。
         chosen = resolver.resolve(self._item(), height=1080)
         self.assertEqual(chosen.url, f"{FRONT}/1080p.h264.mp4.m3u8")
 
@@ -310,7 +313,7 @@ class MediaTests(unittest.TestCase):
             masters={"_TPL_.h264.mp4.m3u8": (403, b"Wrong key"),
                      "_TPL_.av1.mp4.m3u8": (200, _master("av1"))})
         resolved = resolver.resolve(self._item())
-        self.assertEqual(resolved.url, f"{FRONT}/2160p.av1.mp4.m3u8")
+        self.assertEqual(resolved.url, f"{FRONT}/_TPL_.av1.mp4.m3u8")
         self.assertEqual(resolver.cooling("xhamster"), 0)
 
     def test_an_interception_page_is_fetched_again(self):
@@ -318,7 +321,7 @@ class MediaTests(unittest.TestCase):
         blocked = "<html><body>법적 사유로 이용 불가</body></html>"
         resolver = self._resolver(pages=[blocked, WATCH],
                                   masters={"_TPL_.h264.mp4.m3u8": (200, _master())})
-        self.assertEqual(resolver.resolve(self._item()).url, f"{FRONT}/2160p.h264.mp4.m3u8")
+        self.assertEqual(resolver.resolve(self._item()).url, f"{FRONT}/_TPL_.h264.mp4.m3u8")
 
     def test_a_page_without_a_playlist_reports_unavailable(self):
         """渐进式 mp4 只到 720p；没有母清单就不拿它充数，宁可说取不到。"""
