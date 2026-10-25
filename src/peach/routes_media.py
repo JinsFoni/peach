@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import (
     FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
 )
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
@@ -54,7 +55,7 @@ from .remote_media_cache import (
     AVATAR_REFRESH_SECONDS, FAVICON_REFRESH_SECONDS, MEDIA_HEADERS, cache_for,
 )
 from .preview_cache import PreviewCache
-from .routes_auth import require_auth
+from .routes_auth import require_auth, session_allows
 from .segments import SegmentCancelled, SegmentUnavailable, build_hls_playlist
 from .streaming import BufferedFileResponse, CancellableFileResponse, SplicedMp4Response
 from .transcodes import TranscodeCancelled, TranscodeUnavailable
@@ -1106,12 +1107,43 @@ def follow_hls(request: Request, id: int, r: str = "",
                              "referrer-policy": "no-referrer"})
 
 
-@router.api_route("/follow-image", methods=["GET", "HEAD"])
-def follow_image(request: Request, id: int, media: int | None = None,
-                 args: dict[str, str] = Depends(require_auth)):
+class FollowImageRoute:
+    """`/follow-image` 的入口：先按地址里的槽摘要发本机缓存，取不到再查账本。
+
+    一屏四十张封面就是四十趟请求，而且绝大多数只是「把已经躺在盘上的那张图发回去」。
+    这种请求不需要 FastAPI 的依赖求解，也不需要开一次库再读出整条：`v` 就是槽目录名
+    （`web_follow.thumb_version`），命中时整条路径只剩查表、鉴权和一次 `FileResponse`。
+    摘要是空的、形状不对或那格还没落盘，就回落到下面那条按 id 解析来源的路。
+    """
+
+    async def __call__(self, scope, receive, send):
+        request = Request(scope)
+        if not session_allows(request):
+            await JSONResponse({"detail": "unauthorized"}, status_code=401)(scope, receive, send)
+            return
+        state = request.app.state
+        cache = cache_for(state.web_contract)
+        version = request.query_params.get("v") or ""
+        folder = cache.folder_for(version) if version else None
+        hit = cache.response_in(folder, request) if folder is not None else None
+        if hit is not None:
+            await hit(scope, receive, send)
+            return
+        response = await run_in_threadpool(_follow_image, request)
+        await response(scope, receive, send)
+
+
+def _follow_image(request: Request) -> Response:
+    """摘要没命中时那条路：按 id 查账本解析来源，必要时去上游取回并落到本机缓存。"""
     state = request.app.state
+    try:
+        item_id = int(request.query_params.get("id") or "")
+        media_arg = request.query_params.get("media") or ""
+        media = int(media_arg) if media_arg else None
+    except ValueError:
+        return Response(status_code=404)
     with state.database.read_connection() as connection:
-        item = FollowStore(lambda: connection).item(id)
+        item = FollowStore(lambda: connection).item(item_id)
     if item is None:
         return Response(status_code=404)
     cache = cache_for(state.web_contract)
@@ -1126,7 +1158,7 @@ def follow_image(request: Request, id: int, media: int | None = None,
         from .http import public_https_url
         if not public_https_url(url or ""):
             raise ValueError("图片来源不可用")
-        key = f"image:{url}"
+        key = web_follow.image_cache_key(url)
         hit = cache.response(key, request)
         if hit is not None:
             return hit
@@ -1140,6 +1172,9 @@ def follow_image(request: Request, id: int, media: int | None = None,
             state.http_transport.client, request.method, target, incoming=request.headers))
     except (ValueError, FollowMediaUnavailable, FollowProxyError, OSError, httpx.HTTPError):
         return Response(status_code=404, headers={"cache-control": "no-store"})
+
+
+router.add_route("/follow-image", endpoint=FollowImageRoute(), methods=["GET", "HEAD"])
 
 
 def _jav_preview_target(url: str) -> ResolvedFollowMedia:

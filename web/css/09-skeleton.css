@@ -109,16 +109,23 @@
    （`reveal-skeleton`）同一形态。类名由 app.js 的 `watchPendingImages` 标、`settleImage`
    收。微光晚 180ms 才淡入，门槛与 `.skeleton-awaiting` 同一个数：本地图多半在这之前
    就到了，那种一帧都不该看见它。底色垫 `--ground`，否则半透明的微光落在 `.pic` 的
-   黑底上只剩一片黑。收尾那一段（`.ui-imgdone`）在 frontend/src/card-art/card-art.css。 */
+   黑底上只剩一片黑。两段的长度都读 `--motion-cover`：这一格只是两张画对调，慢过一帧
+   该有的长度就成了「图在慢慢浮上来」。收尾那一段（`.ui-imgdone`）在
+   frontend/src/card-art/card-art.css。 */
 .imgwait::after{content:'';position:absolute;inset:0;right:-200%;z-index:5;
   pointer-events:none;border-radius:inherit;
   background:linear-gradient(to right,var(--hover),var(--skeleton-sheen) 50%,var(--hover)) 0 0/50% 100%,
     var(--ground);
   opacity:0;filter:blur(2px);visibility:hidden;
-  transition:opacity var(--motion-reveal),filter var(--motion-reveal),visibility 0s var(--motion-reveal)}
+  transition:opacity var(--motion-cover),filter var(--motion-cover),visibility 0s var(--motion-cover)}
 .imgwait::after{opacity:1;filter:none;visibility:visible;transition-delay:180ms;
   animation:skeleton-sweep 1.5s ease-in-out infinite reverse}
 @starting-style{.imgwait::after{opacity:0;filter:blur(2px)}}
+/* 等图的这几帧里，格子本身也垫成微光起笔的那个色。卡面默认是纯黑（正片和上下留白要它），
+   但图没到手时露纯黑读成「这里什么都没有」；微光渐变本来就以 `--hover` 起笔，垫同一个色，
+   180ms 后微光淡入时也没有色阶跳变。规则留在这份旧样式表里，是因为 `.peach-react
+   [data-media-pic]` 那条黑底在 React 产物里，按约定旧样式表排在它后面，同一个格子上这条赢。 */
+[data-media-card] [data-media-pic].imgwait{background:var(--hover)}
 /* 封面和带脸框的头像取景完才露面：大图边下边画，取景要等 `load`，之前画出来的是几何居中，
    取景那一下画面会跳。缓存图在插入时就取景（`frameCachedImages`）；回落图摘掉脸框后不再等。 */
 img.cover:not([data-frame]),img[data-facebox]:not([data-face-framed]){visibility:hidden}

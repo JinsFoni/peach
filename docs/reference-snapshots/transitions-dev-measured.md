@@ -19,7 +19,7 @@
 时长与缓动一律并进 Peach 已有的动效 token：`--board-motion`（.3s cubic-bezier(.4,0,.2,1)）、
 `--spring-press`（208ms 采样弹簧，峰值 1.088）、`--motion-swap`（.25s）、
 `--motion-count`（.25s cubic-bezier(.34,1.45,.64,1)）、`--motion-reveal`（.4s）、
-`--motion-stagger`（70ms），全部由 `board.css` 那一条
+`--motion-cover`（.12s）、`--motion-stagger`（70ms），全部由 `board.css` 那一条
 `prefers-reduced-motion` 规则统一归零。
 
 | 配方 | slug | 上游取值 | Peach 落成值 | 落点 |

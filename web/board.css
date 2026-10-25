@@ -406,7 +406,10 @@ body>.board-filter-frame{margin-inline:16px}
    带超调——徽标从零长到原大小，匀速收尾读成「被撑开的」，过一点再收住才读成「弹出来的」。
    缓动不同就不能借 `--motion-reveal`：那两档的缓动写在 token 里，动画里再写第二条
    缓动是无效声明，整条 `animation` 会被丢掉。 */
-:root{--motion-swap:.25s cubic-bezier(.4,0,.2,1);--motion-count:.25s cubic-bezier(.34,1.45,.64,1);--motion-reveal:.4s cubic-bezier(.4,0,.2,1);--motion-stagger:70ms;--motion-pop:.4s cubic-bezier(.34,1.36,.64,1)}
+/* `--motion-cover` 是封面那一格的交接：图到手后盖在上面的微光要尽快让开，120ms 的长度读成
+   「图出现了」，400ms 读成「图慢慢浮上来」。它和 `--motion-reveal` 管的是两件事：那一档是
+   骨架换内容、整块版面的重排，这一档只是同一格里的两张画对调。 */
+:root{--motion-swap:.25s cubic-bezier(.4,0,.2,1);--motion-count:.25s cubic-bezier(.34,1.45,.64,1);--motion-reveal:.4s cubic-bezier(.4,0,.2,1);--motion-cover:.12s cubic-bezier(.4,0,.2,1);--motion-stagger:70ms;--motion-pop:.4s cubic-bezier(.34,1.36,.64,1)}
 body{font-size:14px;line-height:20px}
 button,input,select,textarea{font-family:inherit}
 .index .ihead{padding:0;gap:12px;min-width:0;flex-wrap:wrap}
@@ -424,7 +427,7 @@ button,input,select,textarea{font-family:inherit}
   .index .ihead .geist-search{flex-basis:160px}
   .index .ihead .geist-search input,.geist-input{font-size:16px}
 }
-@media(prefers-reduced-motion:reduce){:root{--board-motion:0s;--board-dialog-motion:0s;--spring-pane-ms:0;--spring-press-ms:0;--motion-swap:0s;--motion-count:0s;--motion-reveal:0s;--motion-stagger:0ms;--motion-pop:0s}}
+@media(prefers-reduced-motion:reduce){:root{--board-motion:0s;--board-dialog-motion:0s;--spring-pane-ms:0;--spring-press-ms:0;--motion-swap:0s;--motion-count:0s;--motion-reveal:0s;--motion-cover:0s;--motion-stagger:0ms;--motion-pop:0s}}
 /* Stat Cards 的内层读数与底栏；统计卡仍是可键盘切换的视图入口。 */
 .board-library-chevron{width:16px;height:16px;flex:none;fill:none;stroke:var(--muted);stroke-width:2}
 .board-library-menu{position:fixed;inset:auto;margin:0;box-sizing:border-box;width:265px;max-width:calc(100vw - 32px);padding:10px;border:1px solid var(--line);border-radius:16px;background:var(--ground);color:var(--ink);box-shadow:0 8px 24px light-dark(#0002,#0009);overflow-y:auto;scrollbar-width:none;transform-origin:top left}
