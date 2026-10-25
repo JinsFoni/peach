@@ -31328,10 +31328,10 @@ function Sde(e, t, n = 0, r = null) {
 			pixels: r
 		}];
 	}, g = () => {
-		let e = h(), n = e.find((e) => e.key === p) || e[0], r = d?.[d.selectedIndex ?? -1], i = n.key === "auto" ? m(r?.width, r?.height) || m(t.videoWidth, t.videoHeight) : n.pixels;
-		return c.textContent = i >= 2160 ? "4K" : i >= 720 ? "HD" : "", c.hidden = !c.textContent, {
+		let e = h(), n = d?.length ? d.selectedIndex === void 0 || d.selectedIndex < 0 ? "auto" : String(d.selectedIndex) : p, r = e.find((e) => e.key === n) || e[0], i = d?.[d.selectedIndex ?? -1], a = r.key === "auto" ? m(i?.width, i?.height) || m(t.videoWidth, t.videoHeight) : r.pixels;
+		return c.textContent = a >= 2160 ? "4K" : a >= 720 ? "HD" : "", c.hidden = !c.textContent, {
 			options: e,
-			active: n
+			active: r
 		};
 	}, _ = () => l.getAttribute("aria-hidden") !== "true", v = (e) => {
 		l.setAttribute("aria-hidden", String(!e)), s.setAttribute("aria-expanded", String(e)), e || u?.hide(), e && document.dispatchEvent(new CustomEvent(GE, { detail: "settings" }));
@@ -31937,7 +31937,10 @@ var oD = (e) => typeof e == "string" ? [e] : e, Wde = (e, t) => {
 	a.addEventListener("error", () => y(a.error || e.error), { signal: c }), document.addEventListener("fullscreenchange", () => {
 		n.classList.toggle("vjs-fullscreen", !!document.fullscreenElement && n.contains(document.fullscreenElement)), v("fullscreenchange");
 	}, { signal: c });
-	let b = [], x = /* @__PURE__ */ new WeakSet(), S = [], C = !1, w = () => {
+	let b = [], x = /* @__PURE__ */ new WeakSet(), S = [], C = !1, w = !1, T = null, E = (e) => {
+		let t = [Number(e.width), Number(e.height)].filter((e) => e > 0);
+		return t.length ? Math.min(...t) : 0;
+	}, D = () => {
 		let e = a.engine;
 		if (e && Array.isArray(e.levels)) {
 			S.length !== e.levels.length && (S = e.levels.map(() => !0));
@@ -31949,27 +31952,37 @@ var oD = (e) => typeof e == "string" ? [e] : e, Wde = (e, t) => {
 						return S[t] ?? !0;
 					},
 					set enabled(n) {
-						if (S[t] = n, C) return;
+						if (S[t] = n, w = !0, C) return;
 						C = !0;
 						let r = u;
 						queueMicrotask(() => {
 							if (l || a.engine !== e || r !== u) return;
 							C = !1;
 							let t = S.flatMap((e, t) => e ? [t] : []);
-							e.currentLevel = t.length === 1 ? t[0] : -1;
+							T = t.length === 1 ? t[0] : null, e.currentLevel = T ?? -1;
 						});
 					}
 				};
 			}
-			b.length = e.levels.length, b.selectedIndex = e.currentLevel, v("qualitychange");
+			b.length = e.levels.length, b.selectedIndex = T ?? -1, v("qualitychange");
 		}
 	};
 	b.on = (e, t) => o.addEventListener("qualitychange", t, { signal: c });
-	let T = () => {
+	let O = (e) => {
+		if (w || !b.length || b.length < 2) return;
+		let t = 0, n = E(b[0]);
+		for (let e = 1; e < b.length; e++) {
+			let r = E(b[e]);
+			r > n && (t = e, n = r);
+		}
+		T = t, e.currentLevel = t, D();
+	}, k = () => {
 		let e = a.engine;
-		e && Array.isArray(e.levels) && !x.has(e) && (x.add(e), e.on("hlsManifestParsed", w), e.on("hlsLevelSwitched", w)), w();
+		e && Array.isArray(e.levels) && !x.has(e) && (x.add(e), e.on("hlsManifestParsed", () => {
+			D(), O(e);
+		}), e.on("hlsLevelSwitched", D)), D(), e && O(e);
 	};
-	return e.addEventListener("loadedmetadata", T, { signal: c }), {
+	return e.addEventListener("loadedmetadata", k, { signal: c }), {
 		on: (e, t) => oD(e).forEach((e) => o.addEventListener(e, t, { signal: c })),
 		off: (e, t) => oD(e).forEach((e) => o.removeEventListener(e, t)),
 		one: (e, t) => oD(e).forEach((e) => o.addEventListener(e, t, {
@@ -32007,16 +32020,17 @@ var oD = (e) => typeof e == "string" ? [e] : e, Wde = (e, t) => {
 			e.poster = t;
 		},
 		src: (t) => {
-			p = t, m = null, n.classList.remove("vjs-error"), u++, d++, C = !1, S = [], b.length = 0;
+			p = t, m = null, n.classList.remove("vjs-error"), u++, d++, C = !1, w = !1, T = null, S = [], b.length = 0;
 			let r = t.type.toLowerCase().includes("dash") ? "dash-video" : "hlsjs-video";
 			if (a.localName !== r) {
 				let t = a;
-				a = document.createElement(r), t.replaceWith(a), a.append(e), t.adapter.destroy(), a.addEventListener("error", () => y(a.error || e.error), { signal: c }), S = [], b.length = 0;
+				a = document.createElement(r), t.replaceWith(a), a.append(e), t.adapter.destroy(), a.addEventListener("error", () => y(a.error || e.error), { signal: c }), T = null, S = [], b.length = 0;
 			}
 			a.source = {
 				...t,
-				src: new URL(t.src, location.href).href
-			}, T();
+				src: new URL(t.src, location.href).href,
+				capRenditionToPlayerSize: !1
+			}, k();
 		},
 		currentSrc: () => p.src,
 		currentSource: () => p,

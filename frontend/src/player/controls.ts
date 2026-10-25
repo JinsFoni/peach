@@ -165,7 +165,12 @@ export function mountPlayerQualityControl(
   };
   const qualityRows = () => {
     const options = rows();
-    const active = options.find((option) => option.key === selectedQuality) || options[0]!;
+    /* 勾哪一行看引擎此刻的状态：自动档是 -1，钉在某一档时就是那一档。来源各自独立的
+       MP4 档位没有引擎轨道，仍按面板自己的选择。 */
+    const chosen = levels?.length
+      ? (levels.selectedIndex === undefined || levels.selectedIndex < 0 ? 'auto' : String(levels.selectedIndex))
+      : selectedQuality;
+    const active = options.find((option) => option.key === chosen) || options[0]!;
     const playing = levels?.[levels.selectedIndex ?? -1];
     const activePixels = active.key === 'auto'
       ? resolution(playing?.width, playing?.height) || resolution(video.videoWidth, video.videoHeight)
