@@ -294,8 +294,8 @@ body #stats [data-section-items]>[aria-selected]:focus-visible{outline:2px solid
 @media(prefers-reduced-motion:reduce){.board-segments-ready>.board-segment-thumb{transition:none}}
 .followtask{border-color:var(--line);border-radius:16px}
 :root[data-theme="dark"]{--page:#111;--ground:#1c1c1c;--surface:#232323;--sunk:#171717;--ink:#fafafa;--ink-2:#d4d4d4;--muted:#a3a3a3;--line:#383838;--line-soft:#303030;--inset:#303030;--picked:#303030;--hover:rgba(255,255,255,.07);--tungsten:#60a5fa}
-/* 侧栏光晕由设置里的「侧栏光晕」一项决定开关：关掉时 --glow-strength 是 0，
-   `.glowlayer::before` 的不透明度跟着算成 0。这里不能再压一条 display:none——那会让设置面板上的开关、强度、
+/* 光晕由设置里的「光晕」一项决定开关：关掉时 --glow-strength 是 0，
+   `[data-glow-layer]::before` 的不透明度跟着算成 0。这里不能再压一条 display:none——那会让设置面板上的开关、强度、
    配色和颗粒四个控件全部调不出任何变化，而界面上没有任何东西说得出为什么。 */
 .tiers{background:transparent}
 /* 面板上沿那道空隙不由自己决定：`.tiers` 收尾留 8px、`main` 上沿又是 14px，加起来 22px。

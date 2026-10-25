@@ -260,12 +260,13 @@ if(location.pathname==='/wall')document.documentElement.setAttribute('data-wall-
 
 <div id="scrim" data-sidebar-scrim></div>
 <!-- 左侧抽屉：滚动层是常驻组件 sidebar（`react/sidebar/`），由路由树画进 #drawerScroll；抽屉本身、覆盖式滚动条与底栏归壳。
-     光晕就是侧栏玻璃面上那两团慢慢漂的光换成用户自己配的三枚，所以它长在抽屉里面、
-     跟着抽屉的圆角一起被裁，正文身后一点都没有。单独占一层是因为失效范围：光晕参数是
-     自定义属性，写在 <html> 上等于让整棵树重算样式，拖一次强度拉条每帧要赔十几毫秒；
-     写在这枚没有子节点的空 div 上，失效范围就只剩它和它那两枚伪元素。
+     光晕就是玻璃面上那两团慢慢漂的光换成用户自己配的三枚，挂在 `data-glow-layer` 这枚空 div 上：
+     抽屉这一枚长在抽屉里面、跟着抽屉的圆角一起被裁，实体资料页的资料卡里另有一枚（同一份标记，
+     由 `react/components/glow-layer.tsx` 挂上去），整页正文身后一点都没有。
+     单独占一层是因为失效范围：光晕参数是自定义属性，写在 <html> 上等于让整棵树重算样式，
+     拖一次强度拉条每帧要赔十几毫秒；写在这枚没有子节点的空 div 上，失效范围就只剩它和它那两枚伪元素。
      怎么画仍然只在 web/css/01-base.css 一份。 -->
-<aside id="drawer" data-sidebar-drawer><div class="glowlayer" aria-hidden="true"></div><div id="drawerScroll" data-sidebar-scroll></div></aside>
+<aside id="drawer" data-sidebar-drawer><div data-glow-layer aria-hidden="true"></div><div id="drawerScroll" data-sidebar-scroll></div></aside>
 <!-- 批量条是常驻组件 batch-dock（`frontend/src/react/batch-dock/`），由路由树画进这个节点；选中集与写操作留在壳里。 -->
 <div data-batch-dock></div>
 

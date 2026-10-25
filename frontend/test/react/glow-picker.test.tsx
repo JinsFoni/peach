@@ -40,7 +40,7 @@ afterEach(() => {
 
 /** 照壳的 `loadGlowPicker` 接上：壳建的那张卡交进来，路由树把内容画成它的子节点。 */
 async function setup(patch: Partial<GlowSettings['homeGlow']> = {}, accent = 'blue') {
-  document.body.innerHTML = '<div class="glowlayer"></div><button id="boardGlowBtn"></button>';
+  document.body.innerHTML = '<div data-glow-layer></div><button id="boardGlowBtn"></button>';
   const root = document.createElement('div');
   root.id = 'boardGlowMenu';
   document.body.append(root);
@@ -107,7 +107,7 @@ describe('点下去写什么', () => {
     expect(store.value.accent).toBe(glowAccent('amber'));
     expect(JSON.parse(localStorage.getItem(SETTINGS_KEY)!).homeGlow.preset).toBe('amber');
     expect(document.documentElement.dataset.accent).toBe(glowAccent('amber'));
-    expect(document.querySelector<HTMLElement>('.glowlayer')!.style.getPropertyValue('--glow-strength')).not.toBe('');
+    expect(document.querySelector<HTMLElement>('[data-glow-layer]')!.style.getPropertyValue('--glow-strength')).not.toBe('');
     expect(pressed(root, '[data-glow-preset]')).toEqual(['钨丝暖阁']);
   });
 

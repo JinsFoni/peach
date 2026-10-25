@@ -76,7 +76,7 @@
 [data-settings-panel] [class~=iconswitch][class~=themeswitch]{display:inline-flex;flex:none;padding:0;border:0;background:transparent;border-radius:var(--pill-radius);box-shadow:0 0 0 1px var(--border-15)}
 [data-settings-panel] [class~=iconswitch][class~=themeswitch] label{width:32px;height:32px;border-radius:50%}
 [data-settings-panel] [class~=iconswitch][class~=themeswitch] svg{width:16px;height:16px}
-/* 侧栏光晕的参数区。它跟着上面那一行开关走，关掉就整块收起来——一组调不出任何效果的
+/* 光晕的参数区。它跟着上面那一行开关走，关掉就整块收起来——一组调不出任何效果的
    拉条和色块留在原地，读的人只会以为是坏了。
 
    右边那 16px 外边距加 10px 内边距是这一块唯一的定位修正，不是留白偏好。Board 那一层

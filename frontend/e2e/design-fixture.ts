@@ -648,10 +648,12 @@ export const PROFILED = {
 
 /** 打开一位有资料的女优：资料表、名字行和外链照服务端下发的形状写，主题按参数切好。
  *  `extra` 覆盖资料里的字段：默认没有看片那一行（`entry_links` 只有 minnano-av 那枚 pill、没有 `feed`），
- *  要验两行都在的几何就从这里补。 */
+ *  要验两行都在的几何就从这里补。
+ *  `prepare` 在导航之前跑，给需要先写进 localStorage 的偏好（外观配色那一类）用：`visit` 自己那一条
+ *  只写 `detailAutoplay`，这里排在后头，写在同一格上的值以这里为准。 */
 export async function openProfiledPerformer(browser: Browser, viewport = DESKTOP, theme: 'light' | 'dark' = 'light',
-  extra: Record<string, unknown> = {}): Promise<Visit> {
-  const opened = await visit(browser, '/', viewport);
+  extra: Record<string, unknown> = {}, prepare?: (page: Page) => Promise<void>): Promise<Visit> {
+  const opened = await visit(browser, '/', viewport, prepare);
   await opened.page.route(/\/api\/entity\?/, (route) => route.fulfill({ json: {
     id: 90_101, kind: 'performer', canonical_name: PROFILED.name, aliases: ['篠崎ゆう子'], display_aliases: ['篠崎ゆう子'],
     user_aliases: [], asset_count: 42, tags: [], related_performers: [], metadata: {},

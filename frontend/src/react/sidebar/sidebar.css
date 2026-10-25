@@ -89,7 +89,7 @@ html>body{padding-left:var(--railW)}
 /* 换主题时整页先截一张快照，玻璃在快照里画成实底，免得模糊层闪一下。 */
 html[data-theme-snapshot] :is([data-sidebar-drawer],[data-sidebar-glide]){backdrop-filter:none!important;background-color:var(--ground)!important;transition:none!important}
 [data-sidebar-drawer][data-sidebar-drawer],[data-sidebar-drawer][data-sidebar-drawer][class~=open]{background:var(--glass-drift-a),var(--glass-drift-b),linear-gradient(125deg,var(--glass-sheen),transparent 42%,var(--glass-low)),var(--glass-fill);background-size:200% 200%,200% 200%,auto;background-repeat:no-repeat,no-repeat,repeat;background-position:50% 20%,80% 70%,0 0;animation:glassdriftx calc(41s * var(--glow-drift-scale)) linear infinite,glassdrifty calc(67s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-drift-play);backdrop-filter:var(--glass-optic,blur(22px)) saturate(160%) var(--glass-lume);border:0;box-shadow:inset 0 1px 0 var(--glass-rim),inset 1px 0 0 var(--glass-low),inset -1px 0 0 var(--glass-low),inset 0 -1px 0 var(--glass-low),var(--glass-shadow)}
-/* 抽屉这块玻璃上的反光归 `.glowlayer`：用户配得了色的三枚光晕按同一套 drift 在这里漂，自带那两团留着
+/* 抽屉这块玻璃上的反光归 `[data-glow-layer]`：用户配得了色的三枚光晕按同一套 drift 在这里漂，自带那两团留着
    就是两套光斑叠着走，亮的那一档会把配好的颜色冲淡成灰。「玻璃原色」那一档（根上挂 `data-glow-native`）
    光晕整层算作 0，抽屉把自己那两团拿回来，否则它会是全场唯一一块不反光的玻璃。 */
 :root:not([data-glow-native]) [data-sidebar-drawer][data-sidebar-drawer]{--glass-drift-a:none;--glass-drift-b:none}

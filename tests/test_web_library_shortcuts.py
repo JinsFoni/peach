@@ -16,7 +16,10 @@ class LibraryShortcutsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.path = Path(self.tmp.name).resolve() / "ledger.db"
+        # 图的几个根都钉在这个临时目录里：不钉就落回真实数据根的 generated，
+        # 机器上装过同名实体图时，「这个身份有没有图」会跟着机器变。
+        root = Path(self.tmp.name).resolve()
+        self.path = root / "ledger.db"
         with closing(sqlite3.connect(self.path)) as c, c:
             c.executescript("""
                 CREATE TABLE profile(id TEXT PRIMARY KEY,settings_json TEXT,updated_at TEXT);
@@ -29,7 +32,9 @@ class LibraryShortcutsTests(unittest.TestCase):
                 CREATE TABLE asset(id INTEGER PRIMARY KEY,medium TEXT,disposal TEXT,size INTEGER,snapshot_path TEXT);
                 CREATE TABLE asset_entity(asset_id INTEGER,entity_id INTEGER,role TEXT);
             """)
-        self.contract = WebContract(self.path)
+        self.contract = WebContract(
+            self.path, avatar_root=root / "avatars", logo_root=root / "logos",
+            cover_root=root / "covers")
 
     def read(self):
         return dispatch_api_get(self.contract, "/api/library-shortcuts", {})

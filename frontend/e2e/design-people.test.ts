@@ -9,6 +9,12 @@ import {
   stubSuggest, installDesignBrowser,
 } from './design-fixture.ts';
 
+/** 一档非默认的光晕配色（预设「深林」）：卡上那三枚要取这里存着的颜色，才证明它跟着设置走。 */
+const GLOW_PINE = {
+  on: true, preset: 'pine', strength: 100, noise: 0, speed: 100, soften: 50, size: 50,
+  spot1: { color: '#3f9e57', alpha: 66 }, spot2: { color: '#7fae4a', alpha: 48 }, spot3: { color: '#4f9463', alpha: 56 },
+};
+
 describe('设计决定：人物与厂牌资料页', () => {
   let browser: Browser;
   installDesignBrowser((next) => { browser = next; });
@@ -317,6 +323,45 @@ describe('设计决定：人物与厂牌资料页', () => {
       assert.notEqual(face, 'rgb(255, 255, 255)', '深色下别名浮层还是白底');
       assert.equal(shadow, await popmenuShadow(page), '深色下别名浮层的落影和 .popmenu 不是同一副');
       assert.notEqual(ground, 'rgb(255, 255, 255)', '主题没有切到深色');
+      assert.deepEqual(opened.problems, []);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('资料卡上铺着外观设置里那三枚光晕：单占一层、被卡的圆角裁掉，配色取用户存的那一份', { timeout: 60_000 }, async () => {
+    const opened = await openProfiledPerformer(browser, DESKTOP, 'light', {}, (page) => page.addInitScript((glow) => {
+      localStorage.setItem('peach.settings.v1', JSON.stringify({ detailAutoplay: false, homeGlow: glow }));
+    }, GLOW_PINE));
+    try {
+      const page = opened.page;
+      const shown = await page.locator('[data-entity-card]').evaluate((card) => {
+        const layer = card.querySelector<HTMLElement>(':scope > [data-glow-layer]')!;
+        const [style, cardStyle] = [getComputedStyle(layer), getComputedStyle(card)];
+        const [box, cardBox] = [layer.getBoundingClientRect(), card.getBoundingClientRect()];
+        return {
+          hidden: layer.getAttribute('aria-hidden'),
+          children: layer.childElementCount,
+          position: style.position,
+          zIndex: style.zIndex,
+          pointerEvents: style.pointerEvents,
+          strength: style.getPropertyValue('--glow-strength').trim(),
+          spot1: style.getPropertyValue('--glow-spot-1-color').trim(),
+          spans: (getComputedStyle(layer, '::before').backgroundImage.match(/radial-gradient/g) ?? []).length,
+          cardOverflow: cardStyle.overflow,
+          cardIsolation: cardStyle.isolation,
+          spill: Math.max(cardBox.left - box.left, cardBox.top - box.top, box.right - cardBox.right, box.bottom - cardBox.bottom),
+        };
+      });
+      assert.equal(shown.hidden, 'true', '光晕层没有对辅助技术藏起来');
+      assert.equal(shown.children, 0, '光晕层里还挂着节点');
+      assert.deepEqual([shown.position, shown.zIndex, shown.pointerEvents], ['absolute', '-2', 'none'],
+        '光晕层不是贴满卡、压在内容之下的那一片背景');
+      assert.deepEqual([shown.spans, shown.strength, shown.spot1], [3, '1', 'rgba(63,158,87,0.66)'],
+        '卡上那三枚光晕没有取到设置里那三枚颜色');
+      assert.deepEqual([shown.cardOverflow, shown.cardIsolation], ['hidden', 'isolate'],
+        '卡没有裁住光晕层，或没有自成一个层叠上下文');
+      assert.ok(shown.spill <= .5, `光晕层越出卡的边界 ${shown.spill}px`);
       assert.deepEqual(opened.problems, []);
     } finally {
       await opened.close();

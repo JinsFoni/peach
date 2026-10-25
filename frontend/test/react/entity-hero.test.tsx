@@ -389,6 +389,23 @@ describe('画出什么', () => {
   });
 });
 
+/* 卡面底下那一层光晕（`components/glow-layer.tsx`）：只是背景，不进正文结构。它画成什么样
+ * 归 `web/css/01-base.css`，几何与配色跟随由 `frontend/e2e/design-people.test.ts` 读计算样式断言。 */
+describe('卡面的光晕层', () => {
+  it('资料卡第一格就是光晕层，挂上就按当前配色写进去，自己不占正文', async () => {
+    const host = await open(props());
+    const card = host.querySelector('[data-entity-card]')!;
+    const layer = card.firstElementChild as HTMLElement;
+    expect([layer.tagName, layer.hasAttribute('data-glow-layer'), layer.getAttribute('aria-hidden')])
+      .toEqual(['DIV', true, 'true']);
+    expect(layer.textContent).toBe('');
+    expect(layer.parentElement).toBe(card);
+    expect(layer.style.getPropertyValue('--glow-strength')).not.toBe('');
+    expect(layer.style.getPropertyValue('--glow-spot-1-color')).toMatch(/^rgba\(/);
+    expect(card.querySelector('[data-entity-profile]')?.previousElementSibling).toBe(layer);
+  });
+});
+
 describe('点下去交给壳', () => {
   it('同台艺人与事务所走站内跳转，事务所链接不整页刷新', async () => {
     const acts = actions();

@@ -11,8 +11,15 @@
  * 其余部分差一档。字体同理，取 Board 正文那一副（`--board-body`），CJK 才落在同一款字上。 */
 
 /* ── 卡 ──
- * 一块 --ground 底、18px 圆角、不描边的卡。`overflow:hidden` 让底带的直角被卡的圆角裁掉。 */
+ * 一块 --ground 底、18px 圆角、不描边的卡。`overflow:hidden` 让底带的直角被卡的圆角裁掉。
+ *
+ * 卡面底下是外观设置里那三枚光晕（`components/glow-layer.tsx` 挂的 `[data-glow-layer]`，画法在
+ * `web/css/01-base.css`）。需要三样：定位元素（那一层按 `inset:0` 贴卡）、自成层叠上下文
+ * （负层号落在卡自己的填充之上、正文之下，`isolation` 比给卡加 z-index 稳，不参与外面的层序）、
+ * 已有的 `overflow:hidden` 连圆角一起把它裁掉。 */
 .peach-react [data-entity-card] {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   min-width: 0;

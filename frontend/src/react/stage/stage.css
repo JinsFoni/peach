@@ -59,7 +59,7 @@
   [data-stage][data-stage-kind="item"],[data-stage][data-stage-kind="jav"]{height:calc(100dvh - env(safe-area-inset-top) - 16px)}
 }
 body[data-detail-open]{overflow:hidden;--glow-drift-play:paused}
-body[data-detail-open] [class~=glowlayer]::before{animation-play-state:paused,paused,running}
+body[data-detail-open] [data-glow-layer]::before{animation-play-state:paused,paused,running}
 [data-stage]:not([data-ambient]){background:color-mix(in srgb,var(--surface) 88%,transparent)}
 [data-stage-grid]{display:grid;grid-template-columns:minmax(0,1fr) minmax(350px,390px)}
 /* 媒体在左、信息在右；分集队列与推荐属于独立的底部区域。 */
