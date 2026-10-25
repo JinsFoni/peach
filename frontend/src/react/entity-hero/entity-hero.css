@@ -16,7 +16,8 @@
  * 卡面底下是外观设置里那三枚光晕（`components/glow-layer.tsx` 挂的 `[data-glow-layer]`，画法在
  * `web/css/01-base.css`）。需要三样：定位元素（那一层按 `inset:0` 贴卡）、自成层叠上下文
  * （负层号落在卡自己的填充之上、正文之下，`isolation` 比给卡加 z-index 稳，不参与外面的层序）、
- * 已有的 `overflow:hidden` 连圆角一起把它裁掉。 */
+ * 已有的 `overflow:hidden` 连圆角一起把它裁掉。「玻璃原色」那一档没有那三枚，卡面换成主题
+ * 自带的两团反光，见下面那条挂 `data-glow-native` 的规则。 */
 .peach-react [data-entity-card] {
   position: relative;
   isolation: isolate;
@@ -32,6 +33,26 @@
   font: var(--board-body);
   letter-spacing: 0;
 }
+/* 「玻璃原色」那一档，以及光晕整项关掉的时候（两种情形都由 `appearance/home-glow.ts` 的
+ * `paintGlassFaces` 在根上挂 `data-glow-native`），三枚光晕整层算作 0，每块玻璃退回样式表里
+ * 自己那两团反光。卡面同样是会给光的面，这里照抽屉那套铺上去：同一个两倍大的画布、同一条
+ * 李萨如轨迹（`board.css` 的 `glassdriftx`/`glassdrifty`）、同一个速度倍率，底色仍旧是卡
+ * 自己的 `--ground`，不取玻璃那层半透的 `--glass-fill`。
+ *
+ * 铺在卡自己的背景上，不进 `[data-glow-layer]`：那一层是外观设置里那三枚光晕，它在原色档下
+ * 整层归零，两团自带反光属于这类面自己的材质，抽屉也是直接画在自己背景上的。底带那几条
+ * 自带填充会盖住这层光，与三枚光晕同样的取舍。 */
+:root[data-glow-native] .peach-react [data-entity-card] {
+  background-image: var(--glass-drift-a), var(--glass-drift-b),
+    linear-gradient(125deg, var(--glass-sheen), transparent 42%, var(--glass-low));
+  background-size: 200% 200%, 200% 200%, auto;
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-position: 50% 20%, 80% 70%, 0 0;
+  animation: glassdriftx calc(41s * var(--glow-drift-scale)) linear infinite,
+    glassdrifty calc(67s * var(--glow-drift-scale)) linear infinite;
+  animation-play-state: var(--glow-drift-play);
+}
+
 /* 全站焦点环（`01-base.css`）把 React 子树排除在外，这里自己画同一副。 */
 .peach-react [data-entity-card] :is(a, button, [tabindex]):focus-visible {
   outline: 2px solid var(--tungsten);
