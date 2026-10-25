@@ -45,8 +45,8 @@ from .follow_covers import (
 )
 from .follow_store import FollowStore
 from .follow_stream import (
-    FollowMediaUnavailable, FollowProxyError, ResolvedFollowMedia, open_upstream,
-    rewrite_follow_playlist,
+    FollowMediaUnavailable, FollowProxyError, ResolvedFollowMedia, known_playback_codec,
+    open_upstream, rewrite_follow_playlist,
 )
 from .media import MediaUnavailable, normalized_path
 from .platform import within_root
@@ -939,7 +939,8 @@ def _follow_media_size(state, item_id: int, target: ResolvedFollowMedia) -> int 
 
 
 @router.api_route("/follow-qualities", methods=["GET"])
-def follow_qualities(request: Request, id: int, args: dict[str, str] = Depends(require_auth)):
+def follow_qualities(request: Request, id: int, codec: str | None = None,
+                     args: dict[str, str] = Depends(require_auth)):
     """这条关注视频有哪些清晰度可选，以及默认档有多少字节。
 
     单独一个端点而不是塞进 /api/follow：解析要抓一次来源详情页，列表一次几百条，
@@ -953,6 +954,9 @@ def follow_qualities(request: Request, id: int, args: dict[str, str] = Depends(r
     `size` 跟着一起回：渐进下载在浏览器里量不到字节速率（media 请求的
     `encodedBodySize` 是 0），只有拿文件大小和时长换出平均码率，才能把缓冲前沿推进的
     秒数折成 MB/s。这里已经解析完媒体地址，多一次 HEAD 就能拿到，比让浏览器再发一趟便宜。
+
+    `codec` 与 `/follow-stream` 同一个意思：档位表两条梯子一样，但按浏览器能解的那条
+    解析，后面要播的就是同一条，画质菜单与字节数才对得上。
     """
     state = request.app.state
     with state.database.read_connection() as connection:
@@ -960,7 +964,8 @@ def follow_qualities(request: Request, id: int, args: dict[str, str] = Depends(r
     if item is None:
         return JSONResponse({"error": "no such follow item"}, status_code=404)
     try:
-        resolved = state.follow_media_resolver.resolve(item)
+        resolved = state.follow_media_resolver.resolve(
+            item, prefer_codec=known_playback_codec(codec))
     except FollowMediaUnavailable:
         return {"qualities": [], "size": None}
     # 档位数量不写死：正则匹配 video_url 与任意编号的 video_alt_urlN，
@@ -977,21 +982,27 @@ def follow_qualities(request: Request, id: int, args: dict[str, str] = Depends(r
 @router.api_route("/follow-stream", methods=["GET", "HEAD"])
 def follow_stream(request: Request, id: int, media: int | None = None,
                   quality: int | None = None, download: int = 0,
+                  codec: str | None = None,
                   args: dict[str, str] = Depends(require_auth)):
-    """Play a remote follow candidate through Peach without exposing its upstream URL."""
+    """Play a remote follow candidate through Peach without exposing its upstream URL.
+
+    `codec` 是浏览器报上来的解码能力（`av1` 等）：同一部片子的两条梯子分辨率一样，
+    av1 那条约省四分之三的字节，起播与拖动都落在这个差上。认不出的当作没点名。
+    """
     state = request.app.state
     with state.database.read_connection() as connection:
         item = FollowStore(lambda: connection).item(id)
     if item is None:
         return JSONResponse({"error": "no such follow item"}, status_code=404)
     try:
-        key = f"follow:{item.id}:media:{media}:quality:{quality}"
+        key = f"follow:{item.id}:media:{media}:quality:{quality}:codec:{codec}"
         cache = cache_for(state.web_contract)
         extra = {"content-disposition": _attachment_disposition(item.title, item.media_url or item.url)} if download else None
         cached = cache.response(key, request, headers=extra)
         if cached is not None:
             return cached
-        target = state.follow_media_resolver.resolve(item, media, quality)
+        target = state.follow_media_resolver.resolve(item, media, quality,
+                                                     prefer_codec=known_playback_codec(codec))
         if target.playlist:
             # 只有 HLS 的来源：浏览器要的是改写后的清单，不是一整段字节流；
             # 清单按次取回，不进响应缓存。下载走不了这条路——清单本身不是片子。
@@ -1000,7 +1011,8 @@ def follow_stream(request: Request, id: int, media: int | None = None,
             # 没点名档位时把来源给的各档都写进清单，播放器据此自适应升降档。
             return _follow_playlist_response(state, request, item, target,
                                              adaptive=quality is None,
-                                             media=media, quality=quality)
+                                             media=media, quality=quality,
+                                             codec=codec)
         # 跟重定向、逐跳过白名单、非 2xx 一律不转发，都在 follow_stream 里；
         # 这里只负责把 Peach 的请求接到那个流上。
         extra = {"content-disposition": _attachment_disposition(item.title, target.url)} if download else None
@@ -1025,7 +1037,8 @@ FOLLOW_PLAYLIST_LIMIT = 2 * 1024 * 1024
 def _follow_playlist_response(state, request: Request, item, target, *,
                               adaptive: bool = True,
                               media: int | None = None,
-                              quality: int | None = None) -> Response:
+                              quality: int | None = None,
+                              codec: str | None = None) -> Response:
     """取回清单、把每一跳换成 `/follow-hls` 的短键，再把清单交给播放器。
 
     上游地址（含签名查询串）只活在这个进程里：浏览器看到的每一跳都是
@@ -1044,7 +1057,8 @@ def _follow_playlist_response(state, request: Request, item, target, *,
         if not state.follow_media_resolver.forget(item.id):
             raise
         LOGGER.info("follow playlist for item %s re-resolved after a refusal", item.id)
-        refreshed = state.follow_media_resolver.resolve(item, media, quality)
+        refreshed = state.follow_media_resolver.resolve(item, media, quality,
+                                                        prefer_codec=known_playback_codec(codec))
         return _playlist_response(state, request, item, refreshed,
                                   adaptive=adaptive and request.method != "HEAD")
 
@@ -1075,13 +1089,21 @@ def _playlist_response(state, request: Request, item, target, *, adaptive: bool)
                              "referrer-policy": "no-referrer"})
 
 
+#: 分片与密钥对同一把键永远是同一段字节（键是上游地址的摘要），可以当不可变资源留着：
+#: 上游自己给的是 `public, max-age=315360000`，这里比它保守一点，但也足够让回拖、重开
+#: 同一条落在浏览器缓存里，不必再经一次上游。带 `content-range` 的部分响应不这么留——
+#: 只存半段会让后面的请求对不上号。
+FOLLOW_RESOURCE_CACHE = "private, max-age=3600, immutable"
+
+
 @router.api_route("/follow-hls", methods=["GET", "HEAD"])
 def follow_hls(request: Request, id: int, r: str = "",
                args: dict[str, str] = Depends(require_auth)):
     """关注条目 HLS 清单里的一跳：子清单、分片或密钥。
 
-    键只在本机内存里对回上游地址，所以前端拿不到上游 URL；每一条的分片因而也不进
-    响应缓存——签名几分钟就换一次，缓存只会攒下一批取不到的字节。
+    键只在本机内存里对回上游地址，所以前端拿不到上游 URL。键是地址的摘要，同一把键
+    永远是同一段字节：分片与密钥按不可变资源交给浏览器留着，回拖与重开同一条不必再
+    经一次上游；清单与错误仍是一次性的。
     """
     state = request.app.state
     if not r:
@@ -1107,7 +1129,9 @@ def follow_hls(request: Request, id: int, r: str = "",
                    or urlsplit(str(upstream.url)).path.lower().endswith(".m3u8"))
     if not is_playlist:
         headers = {name: upstream.headers[name] for name in MEDIA_HEADERS if name in upstream.headers}
-        headers.update({"cache-control": "private, no-store", "referrer-policy": "no-referrer"})
+        headers.update({"cache-control": ("private, no-store" if "content-range" in headers
+                                          else FOLLOW_RESOURCE_CACHE),
+                        "referrer-policy": "no-referrer"})
         if request.method == "HEAD":
             upstream.close()
             return Response(status_code=upstream.status_code, headers=headers)

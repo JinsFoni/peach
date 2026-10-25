@@ -823,8 +823,9 @@ Instagram 的独立用户登录会话未取得，自动适配器不进正式依�
   `ip*.ahcdn.com`，`xhcdn.com` 与 `ahcdn.com` 都在这一来源的媒体白名单里，清单改写走
   ADR-0114 那套；母清单整份交给播放器（ADR-0119），播放器起播即钉这一条的最高档、四秒
   分片跟着档位走（ADR-0120）。渐进式 mp4（`downloadDropdownComponent.sources.mp4`）只到 720p，不采用。
-  token 与编解码绑定、由 UA 决定（标准 UA 拿 av1、Safari 拿 h265），所以先按 h264 换一次
-  签，换不成才用页面给的那一档——换签失败是 `403 Wrong key`，不是限流。证据见
+  token 与编解码绑定、由 UA 决定（标准 UA 拿 av1、Safari 拿 h265），所以按浏览器报得出的能力
+  点名换哪一档、换不成才用页面给的那一档——换签失败是 `403 Wrong key`，不是限流（ADR-0121）。
+  两条梯子同为最高分辨率时字节差三倍上下：3840×2160 的 av1 分片约 1.02 MB、h264 约 4.63 MB。证据见
   [取证记录](reference-snapshots/follow-xhamster-creator.md)。
 
 ## 目录型来源与社媒链接

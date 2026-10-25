@@ -100,6 +100,15 @@ _XHAMSTER_HLS_RE = re.compile(
     r"""(https://[^"'\s]+?/media=hls4/[^"'\s]+?)/_TPL_\.(av1|h264|h265)\.mp4\.m3u8""")
 #: 母清单里一档写成 `#EXT-X-STREAM-INF:…,RESOLUTION=1920x1080`，下一行是子清单地址。
 _XHAMSTER_STREAM_INF_RE = re.compile(r"RESOLUTION=\d+x(\d+)", re.IGNORECASE)
+#: 浏览器可以点名要的编解码。目前只有 xHamster 分编解码梯子；点名的那一档换签换不成就
+#: 退回 h264，所以这里是一张白名单，不需要逐个浏览器判断。
+PLAYBACK_CODECS = frozenset({"av1", "h264", "h265"})
+
+
+def known_playback_codec(codec: str | None) -> str | None:
+    """浏览器点名的编解码；认不出的当作没点名。"""
+    named = (codec or "").strip().casefold()
+    return named if named in PLAYBACK_CODECS else None
 
 
 def _video_height(url: str) -> int:
@@ -231,15 +240,17 @@ class FollowMediaResolver:
         #: 已解析地址的落盘目录；None 表示只在内存里活（测试与无状态入口）。
         self.playback_root = (Path(state_root) / self.PLAYBACK_DIR
                               if state_root is not None else None)
-        self._cache: dict[int, tuple[float, ResolvedFollowMedia]] = {}
-        self._misses: dict[int, float] = {}
+        #: (条目 id, 浏览器点名的编解码) → (过期时刻, 解析结果)。同一部片子的两条
+        #: 编解码梯子各存一格：分辨率一样、字节不一样，谁都顶不掉谁。
+        self._cache: dict[tuple[int, str | None], tuple[float, ResolvedFollowMedia]] = {}
+        self._misses: dict[tuple[int, str | None], float] = {}
         self._cooldowns: dict[str, float] = {}
         self._item_locks: dict[int, threading.Lock] = {}
         #: HLS 子资源键 → (过期时刻, 条目 id, 清单根地址, 上游地址)。
         self._resources: OrderedDict[str, tuple[float, int, str, str]] = OrderedDict()
-        #: 条目 id → (过期时刻, 并好的母清单)。同一档的母清单每次都要多取几次，
-        #: 而播放器可能连着要两三遍。
-        self._masters: dict[int, tuple[float, bytes]] = {}
+        #: (条目 id, 清单根地址) → (过期时刻, 并好的母清单)。同一档的母清单每次都要多取
+        #: 几次，而播放器可能连着要两三遍。根地址里带着编解码与签名，两条梯子不会串。
+        self._masters: dict[tuple[int, str], tuple[float, bytes]] = {}
         #: 上一次清扫落盘目录的时刻（`_sweep_playback`）。
         self._swept = 0.0
         self._lock = threading.Lock()
@@ -295,20 +306,20 @@ class FollowMediaResolver:
                 lock = self._item_locks[item_id] = threading.Lock()
             return lock
 
-    def _cached(self, item_id: int) -> ResolvedFollowMedia | None:
+    def _cached(self, scope: tuple[int, str | None]) -> ResolvedFollowMedia | None:
         """缓存命中返回结果；近期失败过直接抛出，不再回源。调用方持有 `_lock`。"""
         now = self.clock()
-        cached = self._cache.get(item_id)
+        cached = self._cache.get(scope)
         if cached and cached[0] > now:
             return cached[1]
-        missed = self._misses.get(item_id)
+        missed = self._misses.get(scope)
         if missed is not None:
             if missed > now:
                 raise FollowMediaUnavailable("Rule34Video 详情页刚刚未取得，稍后再试")
-            del self._misses[item_id]
+            del self._misses[scope]
         return None
 
-    def _remember_miss(self, item_id: int) -> None:
+    def _remember_miss(self, scope: tuple[int, str | None]) -> None:
         with self._lock:
             now = self.clock()
             for key, expiry in list(self._misses.items()):
@@ -316,33 +327,41 @@ class FollowMediaResolver:
                     del self._misses[key]
             while self._misses and len(self._misses) >= self.max_cache_entries:
                 self._misses.pop(next(iter(self._misses)))
-            self._misses[item_id] = now + self.MISS_TTL
-        self._drop_playback(item_id)
+            self._misses[scope] = now + self.MISS_TTL
+        self._drop_playback(scope)
 
-    def _remember(self, item_id: int, resolved: ResolvedFollowMedia,
+    def _remember(self, scope: tuple[int, str | None], resolved: ResolvedFollowMedia,
                   ttl: float | None = None) -> None:
         """写入缓存并保持有界。调用方持有 `_lock`。"""
         now = self.clock()
         for key, (expiry, _) in list(self._cache.items()):
             if expiry <= now:
                 del self._cache[key]
-        self._cache.pop(item_id, None)
+        self._cache.pop(scope, None)
         while self._cache and len(self._cache) >= self.max_cache_entries:
             self._cache.pop(next(iter(self._cache)))
-        self._cache[item_id] = (now + (self.ttl if ttl is None else ttl), resolved)
-        self._save_playback(item_id, resolved)
+        self._cache[scope] = (now + (self.ttl if ttl is None else ttl), resolved)
+        self._save_playback(scope, resolved)
 
     def forget(self, item_id: int) -> bool:
-        """丢掉这一条的解析结果（内存、失败记录、盘上那份、并好的母清单）。
+        """丢掉这一条的解析结果（内存、失败记录、盘上那几份、并好的母清单）。
 
         上游拒收一份清单时用它：地址可能已经过期，重解析一次比原样重试有用。
+        编解码梯子有几条就丢几条——调用方只给得出条目 id，不知道这次是哪个浏览器在放。
         返回是否真的丢掉了什么，调用方据此决定要不要回源重试。
         """
         with self._lock:
-            dropped = self._cache.pop(item_id, None) is not None
-            dropped = self._misses.pop(item_id, None) is not None or dropped
-            dropped = self._masters.pop(item_id, None) is not None or dropped
-        return self._drop_playback(item_id) or dropped
+            scopes = {key for key in (*self._cache, *self._misses) if key[0] == item_id}
+            dropped = False
+            for scope in scopes:
+                dropped = self._cache.pop(scope, None) is not None or dropped
+                dropped = self._misses.pop(scope, None) is not None or dropped
+            masters = [key for key in self._masters if key[0] == item_id]
+            for key in masters:
+                dropped = self._masters.pop(key, None) is not None or dropped
+        for path in self._playback_item_paths(item_id):
+            dropped = self._drop_path(path) or dropped
+        return dropped
 
     # ---- 已解析地址的落盘 ------------------------------------------------
     #
@@ -350,10 +369,24 @@ class FollowMediaResolver:
     # 只存带明确到期时间的地址：认不出还剩多久就宁可每次重解析，不拿一批可能已经
     # 410 的地址去赌。文件按条目一条，权限收到属主可读。
 
-    _EXPIRY = re.compile(r"(?:validto|end)=(\d{9,})")
+    #: 签名到期时刻的两种写法：查询串里的 `validto=`／`end=`，和 xHamster 直接写进路径的
+    #: `…==,1792926000/media=hls4/…`（逗号后面那串就是到期时刻）。只认前一种的话，
+    #: 这一家的清单永远落不了盘，每打开一次都要重新抓作品页。
+    _EXPIRY = re.compile(r"(?:validto|end)=(\d{9,})|,(\d{9,11})/")
 
-    def _playback_path(self, item_id: int) -> Path | None:
-        return None if self.playback_root is None else self.playback_root / f"{item_id}.json"
+    @classmethod
+    def _expiry_stamps(cls, url: str) -> set[float]:
+        """地址上写着的到期时刻，两种写法一起收。"""
+        return {float(found) for match in cls._EXPIRY.finditer(url)
+                for found in match.groups() if found}
+
+    def _playback_path(self, scope: tuple[int, str | None]) -> Path | None:
+        """按条目与编解码各存一份：两条梯子的地址有效期一样，可取回的内容不一样。"""
+        if self.playback_root is None:
+            return None
+        item_id, codec = scope
+        name = f"{item_id}" if codec is None else f"{item_id}.{codec}"
+        return self.playback_root / f"{name}.json"
 
     @classmethod
     def playback_expiry(cls, resolved: ResolvedFollowMedia) -> float:
@@ -364,14 +397,15 @@ class FollowMediaResolver:
         """
         stamps = []
         for url in [resolved.url, *(level for _, level in resolved.qualities)]:
-            found = {float(value) for value in cls._EXPIRY.findall(url)}
+            found = cls._expiry_stamps(url)
             if not found:
                 return 0.0
             stamps.append(max(found))
         return min(stamps) if stamps else 0.0
 
-    def _save_playback(self, item_id: int, resolved: ResolvedFollowMedia) -> None:
-        path = self._playback_path(item_id)
+    def _save_playback(self, scope: tuple[int, str | None],
+                       resolved: ResolvedFollowMedia) -> None:
+        path = self._playback_path(scope)
         if path is None or not resolved.playlist:
             return
         expiry = self.playback_expiry(resolved)
@@ -390,7 +424,7 @@ class FollowMediaResolver:
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(path, json.dumps(payload), mode=0o600)
         except OSError:
-            LOGGER.warning("follow playback for item %s could not be written", item_id,
+            LOGGER.warning("follow playback for item %s could not be written", scope[0],
                            exc_info=True)
             return
         self._sweep_playback()
@@ -413,8 +447,8 @@ class FollowMediaResolver:
             except OSError:
                 continue
 
-    def _load_playback(self, item_id: int) -> ResolvedFollowMedia | None:
-        path = self._playback_path(item_id)
+    def _load_playback(self, scope: tuple[int, str | None]) -> ResolvedFollowMedia | None:
+        path = self._playback_path(scope)
         if path is None:
             return None
         try:
@@ -422,11 +456,11 @@ class FollowMediaResolver:
             expiry = float(payload["expiry"])
             url = str(payload["url"])
         except (OSError, ValueError, KeyError, TypeError):
-            self._drop_playback(item_id)
+            self._drop_playback(scope)
             return None
         if expiry - time.time() < self.PLAYBACK_REUSE_SECONDS or not url:
             # 已经过期的那份留着也取不回，删掉省得每次打开都读一遍。
-            self._drop_playback(item_id)
+            self._drop_playback(scope)
             return None
         qualities = tuple((int(height), str(level))
                           for height, level in payload.get("qualities") or ())
@@ -437,15 +471,25 @@ class FollowMediaResolver:
             allowed_hosts=tuple(payload.get("allowed_hosts") or ()),
             playlist=True)
 
-    def _drop_playback(self, item_id: int) -> bool:
-        path = self._playback_path(item_id)
-        if path is None:
-            return False
+    def _drop_playback(self, scope: tuple[int, str | None]) -> bool:
+        path = self._playback_path(scope)
+        return False if path is None else self._drop_path(path)
+
+    def _playback_item_paths(self, item_id: int) -> list[Path]:
+        """这一条落过盘的全部文件：默认片源一份，每条编解码梯子各一份。"""
+        if self.playback_root is None:
+            return []
+        try:
+            return sorted(self.playback_root.glob(f"{item_id}.json")) \
+                + sorted(self.playback_root.glob(f"{item_id}.*.json"))
+        except OSError:
+            return []
+
+    @staticmethod
+    def _drop_path(path: Path) -> bool:
         try:
             path.unlink()
             return True
-        except FileNotFoundError:
-            return False
         except OSError:
             return False
 
@@ -537,10 +581,15 @@ class FollowMediaResolver:
         raise FollowMediaUnavailable("媒体来源不受支持")
 
     def resolve(self, item: FollowItemRow, media_index: int | None = None,
-                height: int | None = None) -> ResolvedFollowMedia:
+                height: int | None = None,
+                prefer_codec: str | None = None) -> ResolvedFollowMedia:
         """解析可播地址。`height` 指定清晰度，只有 rule34video、Pornhub 与 xHamster 有多档
         可选；要的那档不存在就退回默认（最高档），不报错——签名 URL 会过期，
-        为一次选档失败中断播放不值得。"""
+        为一次选档失败中断播放不值得。
+
+        `prefer_codec` 是浏览器报上来的解码能力（目前只有 xHamster 分编解码梯子）。
+        同一部片子的两条梯子分辨率一样、地址有效期一样，能取的字节不一样，所以缓存与
+        落盘都按「条目 + 编解码」分开放，两者互不顶掉。"""
         media_items = item.metadata.get("media_items")
         if (not isinstance(media_items, list) or not media_items) \
                 and item.provider == "f95zone":
@@ -561,31 +610,36 @@ class FollowMediaResolver:
                 allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
                 public_hosts=item.provider in _PUBLIC_MEDIA_PROVIDERS)
 
+        scope = (item.id, known_playback_codec(prefer_codec))
         with self._lock:
-            cached = self._cached(item.id)
+            cached = self._cached(scope)
         if cached:
             return _pick_quality(cached, height)
-        persisted = self._load_playback(item.id)
+        persisted = self._load_playback(scope)
         if persisted is not None:
             # 进程重启或内存缓存被挤出之后先看盘上那份：签名还在有效期内，重复打开
             # 同一条就不必再抓一次作品页。
             with self._lock:
-                self._remember(item.id, persisted, ttl=self._playback_ttl(persisted))
+                self._remember(scope, persisted, ttl=self._playback_ttl(persisted))
             return _pick_quality(persisted, height)
         if not item.url or not _page_allowed(item.provider, item.url):
             raise FollowMediaUnavailable("详情页地址不可用")
         with self._item_lock(item.id):
             # 排队期间前一个请求可能已经写好缓存或记下失败，先看一眼再决定回不回源。
             with self._lock:
-                cached = self._cached(item.id)
+                cached = self._cached(scope)
             if cached:
                 return _pick_quality(cached, height)
-            fetcher = {"pornhub": self._fetch_pornhub,
-                       "xhamster": self._fetch_xhamster}.get(
-                           item.provider, self._fetch_rule34video)
-            return _pick_quality(fetcher(item), height)
+            if item.provider == "xhamster":
+                resolved = self._fetch_xhamster(item, scope)
+            elif item.provider == "pornhub":
+                resolved = self._fetch_pornhub(item, scope)
+            else:
+                resolved = self._fetch_rule34video(item, scope)
+            return _pick_quality(resolved, height)
 
-    def _fetch_rule34video(self, item: FollowItemRow) -> ResolvedFollowMedia:
+    def _fetch_rule34video(self, item: FollowItemRow,
+                           scope: tuple[int, str | None]) -> ResolvedFollowMedia:
         """抓一次详情页，解析出各档正片地址并写进缓存；没取到记一次失败。"""
         response = self.fetch(
             item.provider,
@@ -596,7 +650,7 @@ class FollowMediaResolver:
         if response.status != 200 or len(response.body) > self.max_bytes:
             LOGGER.warning("rule34video detail page for follow item %s unavailable: HTTP %s",
                            item.id, response.status)
-            self._remember_miss(item.id)
+            self._remember_miss(scope)
             raise FollowMediaUnavailable("Rule34Video 详情页未取得")
         text = response.body.decode("utf-8", errors="replace")
         found: list[str] = []
@@ -606,7 +660,7 @@ class FollowMediaResolver:
                 found.append(candidate)
         if not found:
             LOGGER.warning("rule34video detail page for follow item %s has no video url", item.id)
-            self._remember_miss(item.id)
+            self._remember_miss(scope)
             raise FollowMediaUnavailable("Rule34Video 正片地址未取得")
         # 高清优先：默认播最高一档，其余作为可选清晰度交给播放器。认不出分辨率的
         # 排在最后但不丢——签名 URL 每次都变，丢了就没有回退。
@@ -616,7 +670,7 @@ class FollowMediaResolver:
             qualities=tuple((_video_height(url), url) for url in ordered),
             allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())))
         with self._lock:
-            self._remember(item.id, resolved)
+            self._remember(scope, resolved)
         return resolved
 
     #: HLS 清单的有效期比签名短得多：2026-10-23 实测 Pornhub 的 `validto` 只有一个
@@ -634,7 +688,8 @@ class FollowMediaResolver:
     #: 验证清单只取开头这一截：`#EXTM3U` 加几行 `EXT-X-STREAM-INF` 就够判。
     PLAYLIST_PROBE_BYTES = 64 * 1024
 
-    def _fetch_pornhub(self, item: FollowItemRow) -> ResolvedFollowMedia:
+    def _fetch_pornhub(self, item: FollowItemRow,
+                       scope: tuple[int, str | None]) -> ResolvedFollowMedia:
         """抓作品页，从 `mediaDefinitions` 里取 HLS 各档，把能取回的那一种写进缓存。
 
         这个站不给可播的渐进式 mp4：`format=mp4` 那条指向 `/video/get_media`，
@@ -661,9 +716,9 @@ class FollowMediaResolver:
                     allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
                     playlist=True)
                 with self._lock:
-                    self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
+                    self._remember(scope, resolved, ttl=self.PLAYLIST_TTL)
                 return resolved
-        self._remember_miss(item.id)
+        self._remember_miss(scope)
         raise FollowMediaUnavailable("Pornhub 正片地址未取得")
 
     def _pornhub_pages(self, item: FollowItemRow, round_index: int) -> list[str]:
@@ -713,15 +768,19 @@ class FollowMediaResolver:
                 return row
         return None
 
-    def _fetch_xhamster(self, item: FollowItemRow) -> ResolvedFollowMedia:
+    def _fetch_xhamster(self, item: FollowItemRow,
+                        scope: tuple[int, str | None]) -> ResolvedFollowMedia:
         """抓作品页，从页面上那条 HLS 母清单取各档，把能取回的那一档写进缓存。
 
         这个站的渐进式 mp4 到 720p 为止，1080p 与 4K 只在播放器的 HLS 里，所以这里只认
         母清单。母清单带到期时间（`end=`），只缓存两分钟，过期后重新解析一次；第一跳是
         `video*.xhcdn.com`，取的时候会 302 到 `ip*.ahcdn.com`，两个主机都在这个来源的
-        白名单里。页面按 UA 发 token：标准 UA 拿到 av1，只有 Safari 拿到 h265，而
-        Safari 解不了 av1——所以先按 h264 换一次签（换成功就是所有浏览器都能播的那一档），
-        换不成就用页面自己的。
+        白名单里。页面按 UA 发 token：标准 UA 拿到 av1，只有 Safari 拿到 h265。
+
+        同一部片子有 av1 与 h264 两条梯子，档位分辨率一样、字节差四倍：2160p 实测平均
+        码率 3.9 与 13.3 Mbps，一段四秒就是 1.0 与 4.6 MB，起播与拖动都落在这个差上。
+        所以先按浏览器自己报上来的解码能力试（记在 `scope` 的编解码那一格），换签换不成
+        就退到 h264——那一档 Chrome、Firefox、Safari 都能解。
 
         取页给两次机会：这条出口上实测八次里有一次回的是地域拦截页（状态 200、正文只有
         几百字节、页面里没有播放器），换一次连接再取就正常，所以没拿到母清单地址时重取
@@ -746,17 +805,17 @@ class FollowMediaResolver:
                 break
             LOGGER.warning("xhamster watch page for follow item %s has no hls master", item.id)
         if template is None:
-            self._remember_miss(item.id)
+            self._remember_miss(scope)
             raise FollowMediaUnavailable("xHamster 正片清单未取得" if page_seen
                                          else "xHamster 作品页未取得")
-        front, codec = template
-        for candidate in xhamster_hls_codecs(codec):
+        front, page_codec = template
+        for candidate in xhamster_hls_codecs(page_codec, scope[1]):
             master_url = f"{front}/_TPL_.{candidate}.mp4.m3u8"
             if not _allowed(item.provider, master_url):
                 continue
             request = HttpRequest("GET", master_url,
                                   {"User-Agent": USER_AGENT, "Referer": str(item.url or "")})
-            if candidate == codec:
+            if candidate == page_codec:
                 master = self.fetch(item.provider, request, self.timeout,
                                     self.PLAYLIST_PROBE_BYTES)
             else:
@@ -784,9 +843,9 @@ class FollowMediaResolver:
                 allowed_hosts=tuple(_PROVIDER_HOSTS.get(item.provider, ())),
                 playlist=True)
             with self._lock:
-                self._remember(item.id, resolved, ttl=self.PLAYLIST_TTL)
+                self._remember(scope, resolved, ttl=self.PLAYLIST_TTL)
             return resolved
-        self._remember_miss(item.id)
+        self._remember_miss(scope)
         raise FollowMediaUnavailable("xHamster 正片清单未取得")
 
     # ---- 各档并成一份母清单 ----------------------------------------------
@@ -799,8 +858,9 @@ class FollowMediaResolver:
                       body: bytes, base: str) -> bytes | None:
         """并好的多档母清单；这一档本来就是多档、或并不出两档就返回 None。"""
         now = self.clock()
+        key = (item.id, target.url)
         with self._lock:
-            cached = self._masters.get(item.id)
+            cached = self._masters.get(key)
         if cached and cached[0] > now:
             return cached[1]
         levels = tuple(target.qualities)
@@ -817,7 +877,10 @@ class FollowMediaResolver:
                             *(f"{attributes}\n{url}" for attributes, url in variants)])
         payload = (merged + "\n").encode("utf-8")
         with self._lock:
-            self._masters[item.id] = (now + self.PLAYLIST_TTL, payload)
+            for stale, (expiry, _) in list(self._masters.items()):
+                if expiry <= now:
+                    del self._masters[stale]
+            self._masters[key] = (now + self.PLAYLIST_TTL, payload)
         return payload
 
     def _level_masters(self, item: FollowItemRow,
@@ -962,10 +1025,19 @@ def xhamster_hls_master(text: str) -> tuple[str, str] | None:
     return matched.group(1), matched.group(2).casefold()
 
 
-def xhamster_hls_codecs(codec: str) -> tuple[str, ...]:
-    """按顺序试的编解码。先试 h264——Chrome、Firefox、Safari 都能解；换签不成就用页面自己
-    给的那一档（Chrome 系拿到的 token 是 av1，Safari 是 h265）。"""
-    return ("h264",) if codec == "h264" else ("h264", codec)
+def xhamster_hls_codecs(codec: str, prefer: str | None = None) -> tuple[str, ...]:
+    """按顺序试的编解码：浏览器报得出能解的那一档排在最前，其余退回 h264。
+
+    两条梯子分辨率一样，av1 的码率只有 h264 的三分之一上下，同一段的字节也就差三四倍。
+    换签按编解码绑页面给的 token，换不成时 CDN 回 `403 Wrong key`，所以名单里总留着
+    h264——Chrome、Firefox、Safari 都能解，它是最后一道保底。
+    """
+    page_codec = codec.casefold()
+    order = ["h264"] if page_codec == "h264" else ["h264", page_codec]
+    preferred = (prefer or "").casefold()
+    if preferred in PLAYBACK_CODECS and preferred != "h264":
+        order = [preferred, *(name for name in order if name != preferred)]
+    return tuple(dict.fromkeys(order))
 
 
 def xhamster_hls_variants(master: str, base: str) -> tuple[tuple[int, str], ...]:

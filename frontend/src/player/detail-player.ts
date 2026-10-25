@@ -23,7 +23,7 @@ import {
   averageBitrate, bufferedAhead, createBufferMeter, fmtLoadRate, fmtSpeed, PLAYER_PANEL_EVENT,
   playerSpeedBits, playerStatsOverlayHtml, playerStatsPlot, pushPlayerStat, streamEntries,
 } from './stats';
-import { detailStreamSession, detailStreamSource, directDetailSource } from './stream';
+import { codecQuery, detailStreamSession, detailStreamSource, directDetailSource } from './stream';
 import { stopTelemetry, wireFollowTelemetry, wireTelemetry } from './telemetry';
 import type { MediaFacts, PlayerItem, PlayerSource, SourceQuality, VjsPlayer } from './types';
 import { ensureVideojs } from './videojs';
@@ -238,7 +238,9 @@ export async function mountDetailPlayer(
   });
   source().then((next) => {
     if (!live()) return;
-    segmentedSource = String(next.type || '').includes('mpegurl');
+    /* 布这个标记是为了出错时退回直读原文件，而那条路只对本地转码出来的 HLS 成立：追更条目的
+       片源本身就是远端清单，`/stream` 上没有这一条，换过去只会在 404 上黑屏。 */
+    segmentedSource = !options.source && String(next.type || '').includes('mpegurl');
     if (resume && resume.time > 0) player.one('loadedmetadata', () => {
       if (player.isDisposed()) return;
       const duration = realDuration(player.el().querySelector('video')?.duration) || realDuration(player.duration());
@@ -344,9 +346,10 @@ export function mountPlayer(video: HTMLVideoElement, options: MountPlayerOptions
   if (kind === 'follow') {
     detail = {
       ...detail,
-      source: { src: `/follow-stream?id=${item.id}${media ? `&media=${media.index}` : ''}`, type: media?.media_type || item.media_type || 'video/mp4' },
+      source: { src: `/follow-stream?id=${item.id}${media ? `&media=${media.index}` : ''}${codecQuery()}`,
+        type: media?.media_type || item.media_type || 'video/mp4' },
       checkSourceStatus: false, size: media?.size, poster: item.thumb_url,
-      mediaPromise: (api(`/follow-qualities?id=${encodeURIComponent(item.id)}`) as Promise<MediaFacts | null>).catch(() => null),
+      mediaPromise: (api(`/follow-qualities?id=${encodeURIComponent(item.id)}${codecQuery()}`) as Promise<MediaFacts | null>).catch(() => null),
     };
   } else {
     const poster = detailPosterUrl(item, host.settings().javImage);
