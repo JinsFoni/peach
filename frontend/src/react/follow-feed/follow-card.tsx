@@ -43,8 +43,6 @@ export function FollowAuthorLink({ name, actions, children, ...attrs }: {
 export interface FollowCardProps {
   variant?: 'grid' | 'next';
   retryKey?: number;
-  /** 这张卡在列表开头那几张里（`FOLLOW_EAGER_CARDS`）：卡面图跟卡一起取，其余等滚到跟前才取。 */
-  eager?: boolean;
   group: FollowGroup;
   /** 这张卡的创作者名下那几个来源：头像与署名读它。 */
   authorSources: readonly FollowSource[];
@@ -67,12 +65,11 @@ const NoThumb = ({ provider }: { provider: string }) => (
 
 /** 卡面图片失败时尝试原图代理；数据刷新时允许失败图片重新取图。
  *
- *  取图时机按卡在列表里的位置定：开头的几张跟卡一起取，其余等滚到跟前才取（`loading="lazy"`，
- *  浏览器在还差一屏左右时发请求）。封面格的底色是黑的，第一屏押着不发请求就是看一块黑；
- *  一页几十张图也不该一起挤占同源那几条连接。 */
-function Thumb({ src, fallback, width, height, provider, onLearn, retryKey, eager }: {
+ *  立即加载：封面格的底色是黑的，押着不发请求就是滚到那儿看一块黑。卡一插进文档就取图，
+ *  列表的下一页在还差一屏时就接上，滚动本身不触发取图。 */
+function Thumb({ src, fallback, width, height, provider, onLearn, retryKey }: {
   src: string; fallback?: string; width?: number; height?: number; provider: string;
-  retryKey?: number; eager: boolean;
+  retryKey?: number;
   onLearn?: (width: number, height: number) => void;
 }) {
   const [broken, setBroken] = useState(false);
@@ -81,7 +78,7 @@ function Thumb({ src, fallback, width, height, provider, onLearn, retryKey, eage
   useEffect(() => { setBroken(false) }, [retryKey]);
   if (broken) return <NoThumb provider={provider} />;
   return (
-    <img src={proxied ? fallback : src} alt="" loading={eager ? 'eager' : 'lazy'} decoding="async" referrerPolicy="no-referrer"
+    <img src={proxied ? fallback : src} alt="" loading="eager" decoding="async" referrerPolicy="no-referrer"
       width={width || natural?.width} height={height || natural?.height}
       onError={() => {
         if (fallback && fallback !== src && !proxied) setProxied(true);
@@ -170,15 +167,13 @@ function FollowCardView(props: FollowCardProps) {
         <div data-media-pic="">
           {thumbUrl
             ? <Thumb key={thumbUrl} src={thumbUrl} fallback={imageFallback} width={sized?.width} height={sized?.height}
-                provider={picProvider} onLearn={learn} retryKey={props.retryKey} eager={props.eager !== false} />
+                provider={picProvider} onLearn={learn} retryKey={props.retryKey} />
             : <NoThumb provider={picProvider} />}
           {stack.faces.length > 1 ? (
             <div data-mix-faces="" hidden={!flip.faces.length}>
               {flip.faces.map((src, index) => (
                 <div key={src} data-mix-face={index === flip.current ? 'on' : index === flip.leaving ? 'off' : ''}>
-                  {/* 一叠里翻的那几张平时是隐藏的，押着懒加载就翻不出来，所以照旧立即取，
-                      只把优先级压到最低：先去抢眼前那几张卡的图。 */}
-                  <img src={src} alt="" loading="eager" fetchPriority="low" referrerPolicy="no-referrer" />
+                  <img src={src} alt="" loading="eager" referrerPolicy="no-referrer" />
                 </div>
               ))}
             </div>

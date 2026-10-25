@@ -33,7 +33,7 @@ import { queryClient } from '../query';
 import { FollowAuthorLink, FollowCard } from './follow-card';
 import { authorAvatarHtml, followAuthorEntity, followAuthorName, sourceMark } from './follow-marks';
 import {
-  FOLLOW_AUTO_LOAD_LIMIT, FOLLOW_CREDENTIALS_KEY, FOLLOW_EAGER_CARDS, FOLLOW_FEED_SORTS, FOLLOW_FILTERS, FOLLOW_TAGS_FIRST,
+  FOLLOW_AUTO_LOAD_LIMIT, FOLLOW_CREDENTIALS_KEY, FOLLOW_FEED_SORTS, FOLLOW_FILTERS, FOLLOW_TAGS_FIRST,
   FOLLOW_WORKS_FIRST,
   collectionItems, dropCondition, fetchFollowCredentials, followConditions, followFeedQuery, groupMediaKinds, groupTagType, itemForMedia,
   mergedPage, nextSort, randomOrder, sortAriaLabel, backfillState, withStatus,
@@ -564,13 +564,12 @@ function Cards({ facets, data, context, props, images, retryKey }: {
     `${props.photoSize}:${facets.visible.map((group) => group.primary.id).join(',')}`);
   let body: ReactNode;
   if (facets.visible.length) {
-    body = facets.visible.map((group, index) => {
+    body = facets.visible.map((group) => {
       const source = facets.byId.get(group.primary?.source_id as number);
       const siblings = (source?.author_key && facets.authorSources.get(source.author_key)) || [];
       const id = group.primary.id;
       return (
         <FollowCard key={`${id}:${view.media}`} group={group} authorSources={siblings} media={view.media} retryKey={retryKey}
-          eager={index < FOLLOW_EAGER_CARDS}
           context={context} selected={props.selected.has(cardId(group, view))} selectMode={props.selectMode}
           busy={write.busy.get(cardId(group, view)) || ''} failure={write.failures.get(cardId(group, view)) || ''}
           actions={actions} onStatus={write.status} onSave={write.save} />

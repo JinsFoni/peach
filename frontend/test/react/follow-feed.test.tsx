@@ -7,13 +7,13 @@ import { act, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  FOLLOW_AUTO_LOAD_LIMIT, FOLLOW_EAGER_CARDS, backfillState, dropCondition, followConditions, followPageUrl, followStack, groupMediaKinds, itemForMedia,
+  FOLLOW_AUTO_LOAD_LIMIT, backfillState, dropCondition, followConditions, followPageUrl, followStack, groupMediaKinds, itemForMedia,
   nextSort, prefetchFollowFeed, randomOrder, sortAriaLabel, withStatus,
   type FollowFeedActions, type FollowFeedHelpers, type FollowFeedProps, type FollowGroup, type FollowItem,
   type FollowPage, type FollowSource, type FollowStackInfo, type FollowView,
 } from '../../src/react/follow-feed/follow-feed';
 import { FollowFeedPage } from '../../src/react/follow-feed/follow-feed-page';
-import { FollowCard, type FollowCardProps } from '../../src/react/follow-feed/follow-card';
+import { FollowCard } from '../../src/react/follow-feed/follow-card';
 import { learnFollowDims } from '../../src/react/follow-feed/follow-marks';
 import { queryClient } from '../../src/react/query';
 import { click, mount, mountRoot, settle } from './render';
@@ -59,49 +59,13 @@ it('失败封面随数据刷新重试，可用图片保持同一节点', async (
   expect(root.host.querySelector('[data-media-pic] > img')).toBe(recovered);
 });
 
-const cardProps = (patch: Partial<FollowCardProps> = {}): FollowCardProps => ({
-  group: group(item(4)), authorSources: [], media: 'videos',
-  context: { sources: [], aliases: [], credentials: new Set<string>() }, selected: false, selectMode: false,
-  busy: '', failure: '', actions: { openDetail: vi.fn(), openAuthor: vi.fn(), canFlip: () => false }, ...patch,
-});
-
-it('列表开头的卡面图跟卡一起取：封面格的底是黑的，不押到滚进视口才发请求', async () => {
-  const root = await mountRoot(<FollowCard {...cardProps()} />);
+it('卡面图随卡片一起取：封面格的底是黑的，不押到滚进视口才发请求', async () => {
+  const root = await mountRoot(<FollowCard group={group(item(4))} authorSources={[]} media="videos"
+    context={{ sources: [], aliases: [], credentials: new Set<string>() }} selected={false} selectMode={false}
+    busy="" failure="" actions={{ openDetail: vi.fn(), openAuthor: vi.fn(), canFlip: () => false }} />);
   const img = root.host.querySelector('[data-media-pic] > img')!;
   expect(img.getAttribute('loading')).toBe('eager');
   expect(img.getAttribute('decoding')).toBe('async');
-});
-
-it('靠后的卡面图等滚到跟前才取：先不发请求', async () => {
-  const root = await mountRoot(<FollowCard {...cardProps({ eager: false })} />);
-  expect(root.host.querySelector('[data-media-pic] > img')!.getAttribute('loading')).toBe('lazy');
-});
-
-/** jsdom 不解码图片：给 `src` 就当作载好，宽度非零。 */
-class LoadedImage {
-  onload: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  naturalWidth = 16;
-  referrerPolicy = '';
-  set src(_url: string) { queueMicrotask(() => this.onload?.()) }
-  decode() { return Promise.resolve() }
-}
-
-it('一叠里翻的那几张立即取，但优先级压到最低', async () => {
-  vi.stubGlobal('Image', LoadedImage);
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-  const stacked = group(item(41), { stack: { media: 2, kind: 'video', faces: [{ thumb_url: '/thumb/42', face: 'b' }] } });
-  const root = await mountRoot(<FollowCard {...cardProps({
-    group: stacked, actions: { openDetail: vi.fn(), openAuthor: vi.fn(), canFlip: () => true },
-  })} />);
-  const article = root.host.querySelector('article')!;
-  await act(async () => { article.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })) });
-  await act(async () => { vi.advanceTimersByTime(340 + 420) });
-  await settle();
-  const face = root.host.querySelector('[data-mix-faces] img');
-  expect(face?.getAttribute('loading')).toBe('eager');
-  expect(face?.getAttribute('fetchpriority')).toBe('low');
-  vi.useRealTimers();
 });
 
 describe('请求地址', () => {
@@ -410,16 +374,6 @@ describe('页面', () => {
     expect(host.querySelector('[data-follow-list]')?.hasAttribute('data-follow-wall')).toBe(true);
     // 取到一版就交给壳：详情读的是它。
     expect(given.actions.loaded).toHaveBeenCalled();
-  });
-
-  it(`开头 ${FOLLOW_EAGER_CARDS} 张的卡面图跟卡一起取，再往后等滚到跟前`, async () => {
-    const many = Array.from({ length: FOLLOW_EAGER_CARDS + 2 }, (_, index) => group(item(index + 1)));
-    serve(feed(many));
-    const host = await open(props());
-    const loading = [...host.querySelectorAll('[data-media-pic] > img')].map((img) => img.getAttribute('loading'));
-    expect(loading).toEqual([
-      ...Array.from({ length: FOLLOW_EAGER_CARDS }, () => 'eager'), 'lazy', 'lazy',
-    ]);
   });
 
   it('列表取不到时页头照画：标题与「管理关注」都在，失败原因下面给重试', async () => {
