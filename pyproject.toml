@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==84.0.0"]
+requires = ["setuptools==84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -27,7 +27,7 @@ classifiers = [
 ]
 dependencies = [
   "itsdangerous==2.2.0",
-  "filelock==4.2.0",
+  "filelock==4.2.4",
   "tldextract==5.4.0",
   "APScheduler==3.11.3",
   "beautifulsoup4==4.15.0",
@@ -35,11 +35,11 @@ dependencies = [
   "browserexport==0.4.4",
   "pyahocorasick==2.3.1",
   "curl_cffi==0.16.3",
-  "fastapi==0.143.2",
+  "fastapi==0.161.1",
   # grpcio 与 protobuf 给云下载调 CloudDrive2 的 gRPC 接口（`downloads_clouddrive.py`）。
   # 消息代码由 grpcio-tools 1.84.0 生成后提交，它自带的 protoc 对应 protobuf 7.35.1，
   # 运行时 protobuf 必须同一大版本且不低于它。
-  "grpcio==1.84.0",
+  "grpcio==1.84.1",
   "httpx==0.28.1",
   "m3u8==6.0.0",
   "pillow==12.3.0",
@@ -47,9 +47,9 @@ dependencies = [
   "pystray==0.19.5",
   "pydantic==2.14.1",
   "resvg-py==0.5.0",
-  "sentry-sdk==2.72.0",
+  "sentry-sdk==2.73.0",
   "socksio==1.0.0",
-  "starlette==1.8.0",
+  "starlette==1.9.0",
   "torznab==0.2.1",
   "uvicorn==0.54.0",
   "watchdog==6.0.0",
@@ -68,9 +68,9 @@ peach-tray = "peach.error_reporting:tray_main"
 [project.optional-dependencies]
 # psutil 给 `scripts/agent_worktree.py` 查工作树里的残留进程：当前目录、父进程、CPU 与内存。
 dev = [
-    "filelock==4.2.0",
+    "filelock==4.2.4",
     "psutil==7.2.2",
-    "ruff==0.17.1",
+    "ruff==0.17.2",
     "seiso==0.4.0",
 ]
 build = [
